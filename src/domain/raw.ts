@@ -1,5 +1,7 @@
 import { Schema } from 'effect';
 
+import { checkBucketValues } from './checks';
+
 const NullableString = Schema.NullOr(Schema.String);
 const NullableInt = Schema.NullOr(Schema.Int);
 
@@ -75,7 +77,7 @@ export const RawReview = Schema.Struct({
 export type RawReview = typeof RawReview.Type;
 
 export const GhCheck = Schema.Struct({
-  bucket: Schema.String,
+  bucket: Schema.Literals(checkBucketValues),
   completedAt: Schema.String,
   event: Schema.String,
   link: Schema.String,

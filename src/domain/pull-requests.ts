@@ -1,5 +1,5 @@
 import type { RepositoryTarget } from './model';
-import { textPreview } from './text';
+import { plainMarkdownLine, textPreview } from './text';
 
 export type PullRequestListState = 'all' | 'closed' | 'merged' | 'open';
 
@@ -68,8 +68,9 @@ const markdownDescription = (body: string): string => {
         const withoutListMarker = trimmed
           .replace(/^(?:[-+*]|\d+[.)])\s+/u, '')
           .replace(/^\[[ xX]\]\s+/u, '');
-        if (withoutListMarker.length > 0) {
-          return textPreview(withoutListMarker);
+        const plain = plainMarkdownLine(withoutListMarker);
+        if (plain.length > 0) {
+          return textPreview(plain);
         }
       }
     }

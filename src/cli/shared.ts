@@ -1,13 +1,7 @@
 import { Effect } from 'effect';
 
-import {
-  loadAikidoSnapshot,
-  loadConversationSnapshot,
-  loadGreptileSnapshot,
-  loadSnapshot,
-  loadThreadSnapshot,
-} from '../github/loaders';
-import { resolvePullRequestContext } from '../github/target';
+import { loadBatchedSnapshot } from '../github/batched-snapshot';
+import { loadReviewIndex } from '../github/review-index';
 import { type OutputMode, writeStructured } from './output';
 
 export interface TargetInput {
@@ -16,43 +10,25 @@ export interface TargetInput {
   readonly repo: string;
 }
 
-export const loadContext = Effect.fn('Cli.loadContext')(function* loadContext(input: TargetInput) {
-  const context = yield* resolvePullRequestContext(input.repo, input.pr, input.branch);
-  const snapshot = yield* loadSnapshot(context);
-  return { snapshot, target: context.target };
+export const loadExactSnapshot = Effect.fn('Cli.loadExactSnapshot')(function* loadExactSnapshot(
+  input: TargetInput,
+  includeChecks: boolean,
+) {
+  return yield* loadBatchedSnapshot(input.repo, input.pr, input.branch, includeChecks);
 });
 
-export const loadConversationContext = Effect.fn('Cli.loadConversationContext')(
-  function* loadConversationContext(input: TargetInput) {
-    const context = yield* resolvePullRequestContext(input.repo, input.pr, input.branch);
-    const snapshot = yield* loadConversationSnapshot(context);
-    return { snapshot, target: context.target };
+export const loadMutationContext = Effect.fn('Cli.loadMutationContext')(
+  function* loadMutationContext(input: TargetInput) {
+    const snapshot = yield* loadBatchedSnapshot(input.repo, input.pr, input.branch, false);
+    return { snapshot, target: snapshot.target };
   },
 );
 
-export const loadThreadContext = Effect.fn('Cli.loadThreadContext')(function* loadThreadContext(
-  input: TargetInput,
-) {
-  const context = yield* resolvePullRequestContext(input.repo, input.pr, input.branch);
-  const snapshot = yield* loadThreadSnapshot(context);
-  return { snapshot, target: context.target };
-});
-
-export const loadGreptileContext = Effect.fn('Cli.loadGreptileContext')(
-  function* loadGreptileContext(input: TargetInput) {
-    const context = yield* resolvePullRequestContext(input.repo, input.pr, input.branch);
-    const snapshot = yield* loadGreptileSnapshot(context);
-    return { snapshot, target: context.target };
+export const loadReviewIndexSnapshot = Effect.fn('Cli.loadReviewIndexSnapshot')(
+  function* loadReviewIndexSnapshot(input: TargetInput, includeChecks: boolean) {
+    return yield* loadReviewIndex(input.repo, input.pr, input.branch, includeChecks);
   },
 );
-
-export const loadAikidoContext = Effect.fn('Cli.loadAikidoContext')(function* loadAikidoContext(
-  input: TargetInput,
-) {
-  const context = yield* resolvePullRequestContext(input.repo, input.pr, input.branch);
-  const snapshot = yield* loadAikidoSnapshot(context);
-  return { snapshot, target: context.target };
-});
 
 export const toMode = (agent: boolean, json: boolean): OutputMode => {
   if (agent) {

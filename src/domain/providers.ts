@@ -1,23 +1,38 @@
 import type {
-  AikidoSnapshot,
   AikidoStatus,
   FindingMetadata,
   FindingSeverity,
-  GreptileSnapshot,
   GreptileStatus,
-  IssueComment,
   Provider,
   ProviderActivity,
-  ReviewThread,
   ReviewThreadSummary,
 } from './model';
-import { compareText, textPreview } from './text';
+import type {
+  AikidoStatusSource,
+  GreptileStatusSource,
+  IndexedIssueComment,
+  IndexedReviewThread,
+} from './review-index';
+import { compareText, extractMarkdownTitle } from './text';
 
-const greptileLogins = new Set(['greptile-apps[bot]', 'greptileai[bot]', 'greptile[bot]']);
-const aikidoLogins = new Set(['aikido-pr-checks[bot]', 'aikidosec[bot]']);
+const greptileLogins = new Set([
+  'greptile-apps',
+  'greptile-apps[bot]',
+  'greptileai',
+  'greptileai[bot]',
+  'greptile',
+  'greptile[bot]',
+]);
+const aikidoLogins = new Set([
+  'aikido-pr-checks',
+  'aikido-pr-checks[bot]',
+  'aikidosec',
+  'aikidosec[bot]',
+]);
+const codexLogins = new Set(['chatgpt-codex-connector', 'chatgpt-codex-connector[bot]']);
+const cursorLogins = new Set(['cursor', 'cursor[bot]']);
 
-const titlePattern = /\*\*(?<title>[^*\n]+)\*\*/u;
-const greptileSeverityPattern = /alt=["']P(?<priority>[0-2])["']/iu;
+const priorityPattern = /(?:alt=["'][^"']*|!\[[^\]]*)\bP(?<priority>[0-2])\b/iu;
 const aikidoSeverityPattern = /\b(?<severity>critical|high|medium|low) severity\b/iu;
 const confidencePattern = /Confidence Score:\s*(?<score>[0-9]+(?:\.\d+)?)\/5/iu;
 const reviewMetadataPattern =
@@ -31,14 +46,20 @@ export const providerFor = (login: string, actorType?: string): Provider => {
   if (aikidoLogins.has(normalized)) {
     return 'aikido';
   }
+  if (codexLogins.has(normalized)) {
+    return 'codex';
+  }
+  if (cursorLogins.has(normalized)) {
+    return 'cursor';
+  }
   if (normalized.endsWith('[bot]') || actorType?.toLowerCase() === 'bot') {
     return 'other-bot';
   }
   return 'human';
 };
 
-const greptileSeverity = (body: string): FindingSeverity => {
-  const priority = greptileSeverityPattern.exec(body)?.groups?.['priority'];
+const prioritySeverity = (body: string): FindingSeverity => {
+  const priority = priorityPattern.exec(body)?.groups?.['priority'];
   if (priority === '0') {
     return 'critical';
   }
@@ -68,11 +89,10 @@ export const findingMetadata = (
 ): FindingMetadata => {
   const provider = providerFor(login, actorType);
   const text = body ?? '';
-  const extractedTitle = titlePattern.exec(text)?.groups?.['title']?.trim();
-  const title = extractedTitle === undefined ? null : textPreview(extractedTitle);
+  const title = extractMarkdownTitle(text);
   let severity: FindingSeverity = 'unknown';
-  if (provider === 'greptile') {
-    severity = greptileSeverity(text);
+  if (provider === 'greptile' || provider === 'codex') {
+    severity = prioritySeverity(text);
   } else if (provider === 'aikido') {
     severity = aikidoSeverity(text);
   }
@@ -95,7 +115,7 @@ const countValue = (value: string | undefined): number | null => {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 };
 
-const providerActivity = (comment: IssueComment | null): ProviderActivity | null =>
+const providerActivity = (comment: IndexedIssueComment | null): ProviderActivity | null =>
   comment === null
     ? null
     : {
@@ -107,7 +127,7 @@ const providerActivity = (comment: IssueComment | null): ProviderActivity | null
         url: comment.html_url,
       };
 
-const threadSummary = (thread: ReviewThread): ReviewThreadSummary => ({
+const threadSummary = (thread: IndexedReviewThread): ReviewThreadSummary => ({
   author: thread.root.user.login,
   isOutdated: thread.isOutdated,
   line: thread.line ?? thread.originalLine,
@@ -122,12 +142,14 @@ const threadSummary = (thread: ReviewThread): ReviewThreadSummary => ({
   viewerCanResolve: thread.viewerCanResolve,
 });
 
-const isCompletedGreptileReview = (comment: GreptileSnapshot['issueComments'][number]): boolean => {
+const isCompletedGreptileReview = (
+  comment: GreptileStatusSource['issueComments'][number],
+): boolean => {
   const body = comment.body ?? '';
   return confidencePattern.test(body) || reviewMetadataPattern.test(body);
 };
 
-export const greptileStatus = (snapshot: GreptileSnapshot): GreptileStatus => {
+export const greptileStatus = (snapshot: GreptileStatusSource): GreptileStatus => {
   const activity = snapshot.issueComments
     .filter((comment) => comment.metadata.provider === 'greptile')
     .toSorted((left, right) => compareText(right.updated_at, left.updated_at));
@@ -149,7 +171,7 @@ export const greptileStatus = (snapshot: GreptileSnapshot): GreptileStatus => {
   };
 };
 
-export const aikidoStatus = (snapshot: AikidoSnapshot): AikidoStatus => ({
+export const aikidoStatus = (snapshot: AikidoStatusSource): AikidoStatus => ({
   checks: snapshot.checks.filter((check) => check.name.toLowerCase().includes('aikido')),
   currentHead: snapshot.pullRequest.headRefOid,
   openThreads: snapshot.threads

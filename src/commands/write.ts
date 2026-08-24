@@ -3,7 +3,7 @@ import { Argument, Command, Flag } from 'effect/unstable/cli';
 
 import { markdownOptions, outputMode, targetOptions } from '../cli/flags';
 import { printMutation } from '../cli/presentation';
-import { emit, loadConversationContext, loadThreadContext, toMode } from '../cli/shared';
+import { emit, loadMutationContext, toMode } from '../cli/shared';
 import { readMarkdown } from '../domain/markdown';
 import { selectComment, selectThread } from '../domain/selection';
 import {
@@ -15,7 +15,7 @@ import {
   unresolveThread,
   type ReviewEvent,
 } from '../github/mutations';
-import { resolvePullRequest, resolvePullRequestContext } from '../github/target';
+import { resolvePullRequestContext, resolvePullRequestTarget } from '../github/target';
 
 const replyReferenceArgument = Argument.string('reference').pipe(
   Argument.withDescription('A review-comment:ID or thread:ID reference'),
@@ -51,7 +51,7 @@ export const commentCommand = Command.make(
   ({ agent, bodyFile, branch, json, pr, repo, stdin }) =>
     Effect.gen(function* commentCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const target = yield* resolvePullRequest(repo, pr, branch);
+      const target = yield* resolvePullRequestTarget(repo, pr, branch);
       const created = yield* createIssueComment(target, body);
       yield* Effect.sync(() => {
         emitMutation(agent, json, 'comment', created);
@@ -65,7 +65,7 @@ export const replyCommand = Command.make(
   ({ agent, bodyFile, branch, json, pr, reference, repo, stdin }) =>
     Effect.gen(function* replyCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const { snapshot, target } = yield* loadThreadContext({ branch, pr, repo });
+      const { snapshot, target } = yield* loadMutationContext({ branch, pr, repo });
       const thread = yield* selectThread(snapshot, reference);
       const created = yield* replyToThread(target, thread, body, snapshot.pullRequest.headRefOid);
       yield* Effect.sync(() => {
@@ -80,7 +80,7 @@ export const editCommand = Command.make(
   ({ agent, bodyFile, branch, json, pr, reference, repo, stdin }) =>
     Effect.gen(function* editCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const { snapshot, target } = yield* loadConversationContext({ branch, pr, repo });
+      const { snapshot, target } = yield* loadMutationContext({ branch, pr, repo });
       const selection = yield* selectComment(snapshot, reference);
       const updated = yield* editComment(target, selection, body, snapshot.pullRequest.headRefOid);
       yield* Effect.sync(() => {
@@ -115,7 +115,7 @@ const threadMutationCommand = (name: 'resolve' | 'unresolve') =>
     { ...outputMode, ...targetOptions, reference: threadReferenceArgument },
     ({ agent, branch, json, pr, reference, repo }) =>
       Effect.gen(function* threadMutationCommandGen() {
-        const { snapshot, target } = yield* loadThreadContext({ branch, pr, repo });
+        const { snapshot, target } = yield* loadMutationContext({ branch, pr, repo });
         const thread = yield* selectThread(snapshot, reference);
         const result =
           name === 'resolve'

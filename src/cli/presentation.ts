@@ -2,6 +2,7 @@ import type { ReviewListItem } from '../domain/listing';
 import type { PullRequestSnapshot } from '../domain/model';
 import type { ReviewListPage } from '../domain/pagination';
 import type { PullRequestListPage } from '../domain/pull-requests';
+import type { ReviewIndex } from '../domain/review-index';
 import { renderMarkdown, sanitizeTerminalLine, tone } from '../lib/tty';
 
 const location = (item: ReviewListItem): string => {
@@ -12,7 +13,7 @@ const location = (item: ReviewListItem): string => {
   return item.line === null ? ` ${path}` : ` ${path}:${item.line}`;
 };
 
-export const printSnapshot = (snapshot: PullRequestSnapshot): void => {
+export const printSnapshot = (snapshot: PullRequestSnapshot | ReviewIndex): void => {
   const open = snapshot.threads.filter((thread) => !thread.isResolved).length;
   const resolved = snapshot.threads.length - open;
   console.log(

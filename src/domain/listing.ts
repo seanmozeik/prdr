@@ -1,5 +1,6 @@
-import type { ConversationSnapshot, FindingSeverity, Provider } from './model';
-import { compareText, textPreview } from './text';
+import type { FindingSeverity, Provider } from './model';
+import type { ReviewListingSource } from './review-index';
+import { compareText, findingPreview } from './text';
 
 export type ListProvider = 'all' | Provider;
 export type ListState = 'all' | 'open' | 'resolved' | 'unthreaded';
@@ -33,7 +34,7 @@ const matches = (item: ReviewListItem, filters: ListFilters): boolean =>
   (filters.state === 'all' || item.state === filters.state);
 
 export const listReviewItems = (
-  snapshot: ConversationSnapshot,
+  snapshot: ReviewListingSource,
   filters: ListFilters,
 ): readonly ReviewListItem[] => {
   const threadItems: readonly ReviewListItem[] = snapshot.threads.map((thread) => ({
@@ -43,7 +44,7 @@ export const listReviewItems = (
     line: thread.line ?? thread.originalLine,
     path: thread.path,
     provider: thread.root.metadata.provider,
-    preview: textPreview(thread.root.body),
+    preview: findingPreview(thread.root.body, thread.root.metadata.title),
     ref: thread.root.ref,
     replyCount: Math.max(0, thread.comments.length - 1),
     severity: thread.root.metadata.severity,
@@ -60,7 +61,7 @@ export const listReviewItems = (
       line: comment.line ?? comment.original_line,
       path: comment.path,
       provider: comment.metadata.provider,
-      preview: textPreview(comment.body),
+      preview: findingPreview(comment.body, comment.metadata.title),
       ref: comment.ref,
       replyCount: 0,
       severity: comment.metadata.severity,
@@ -77,7 +78,7 @@ export const listReviewItems = (
     line: null,
     path: null,
     provider: comment.metadata.provider,
-    preview: textPreview(comment.body),
+    preview: findingPreview(comment.body, comment.metadata.title),
     ref: comment.ref,
     replyCount: 0,
     severity: comment.metadata.severity,
@@ -86,22 +87,24 @@ export const listReviewItems = (
     title: comment.metadata.title,
     url: comment.html_url,
   }));
-  const reviewItems: readonly ReviewListItem[] = snapshot.reviews.map((review) => ({
-    author: review.user.login,
-    createdAt: review.submitted_at ?? '',
-    kind: 'review',
-    line: null,
-    path: null,
-    provider: review.metadata.provider,
-    preview: textPreview(review.body),
-    ref: review.ref,
-    replyCount: 0,
-    severity: review.metadata.severity,
-    state: 'unthreaded',
-    threadRef: null,
-    title: review.metadata.title,
-    url: review.html_url,
-  }));
+  const reviewItems: readonly ReviewListItem[] = snapshot.reviews
+    .filter((review) => review.body.trim() !== '')
+    .map((review) => ({
+      author: review.user.login,
+      createdAt: review.submitted_at ?? '',
+      kind: 'review',
+      line: null,
+      path: null,
+      provider: review.metadata.provider,
+      preview: findingPreview(review.body, review.metadata.title),
+      ref: review.ref,
+      replyCount: 0,
+      severity: review.metadata.severity,
+      state: 'unthreaded',
+      threadRef: null,
+      title: review.metadata.title,
+      url: review.html_url,
+    }));
   return [...threadItems, ...unthreadedReviewItems, ...issueItems, ...reviewItems]
     .filter((item) => matches(item, filters))
     .toSorted(

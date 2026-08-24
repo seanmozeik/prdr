@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 
 import { Schema } from 'effect';
 
+import {
+  AgentInspection,
+  AgentListPage,
+  AgentPullRequestListPage,
+  AgentShownComment,
+} from '../src/domain/agent-output-schema';
 import { ProtocolEnvelope } from '../src/domain/protocol';
 
 interface CliResult {
@@ -52,6 +58,56 @@ if (args[0] === 'pr' && args[1] === 'view') {
         updatedAt: '2026-08-24T10:00:00Z',
         url: 'https://github.com/example/prdr/pull/42'
       }));
+} else if (args[0] === 'api' && args[1] === 'graphql' && args.some((argument) => argument.includes('query PrdrReviewIndex'))) {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          author: { __typename: 'User', login: 'reviewer' },
+          baseRefName: 'main',
+          comments: {
+            nodes: [{
+              author: { __typename: 'Bot', login: 'greptile-apps' },
+              body: '<!-- greptile-status -->\\nConfidence Score: 4/5\\nReviews (1): Last reviewed commit: [head](https://github.com/example/prdr/commit/0123456789abcdef0123456789abcdef01234567)',
+              createdAt: '2026-08-24T10:00:00Z',
+              databaseId: 2,
+              id: 'IC_2',
+              updatedAt: '2026-08-24T10:00:00Z',
+              url: 'https://github.com/example/prdr/pull/42#issuecomment-2'
+            }],
+            pageInfo: { endCursor: null, hasNextPage: false }
+          },
+          headRefName: 'feature',
+          headRefOid: '0123456789abcdef0123456789abcdef01234567',
+          isDraft: false,
+          mergeStateStatus: 'CLEAN',
+          number: 42,
+          reviewDecision: '',
+          reviews: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } },
+          reviewThreads: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } },
+          state: 'OPEN',
+          statusCheckRollup: {
+            contexts: {
+              nodes: [{
+                __typename: 'CheckRun',
+                checkSuite: null,
+                completedAt: '2026-08-24T10:00:00Z',
+                conclusion: 'SUCCESS',
+                detailsUrl: 'https://github.com/example/prdr/actions',
+                name: 'Aikido Security',
+                startedAt: '2026-08-24T09:59:00Z',
+                status: 'COMPLETED'
+              }],
+              pageInfo: { endCursor: null, hasNextPage: false }
+            }
+          },
+          title: 'Test pull request',
+          updatedAt: '2026-08-24T10:00:00Z',
+          url: 'https://github.com/example/prdr/pull/42'
+        }
+      }
+    }
+  }));
 } else if (args[0] === 'api' && args[1] === 'graphql' && args.some((argument) => argument.includes('query PrdrPullRequests'))) {
   process.stdout.write(JSON.stringify({
     data: {
@@ -166,26 +222,20 @@ const commentArguments = (mode: '--agent' | '--json'): readonly string[] => [
 const decodeEnvelope = (text: string) =>
   Schema.decodeUnknownSync(ProtocolEnvelope)(JSON.parse(text));
 
-const ListPage = Schema.Struct({
-  hasMore: Schema.Boolean,
-  headRefOid: Schema.String,
-  items: Schema.Array(Schema.Unknown),
-  limit: Schema.Int,
-  nextCursor: Schema.NullOr(Schema.String),
-  target: Schema.Struct({ nameWithOwner: Schema.String, number: Schema.Int }),
-  total: Schema.Int,
-});
-
 describe('CLI process contract', () => {
-  it('answers fast help and version without gh on PATH', async () => {
+  it('answers fast local commands without gh on PATH', async () => {
     const help = await runCli(['--help'], '', '');
     const version = await runCli(['--version'], '', '');
+    const skill = await runCli(['skill'], '', '');
 
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('USAGE');
     expect(help.stderr).toBe('');
     expect(version.exitCode).toBe(0);
     expect(version.stdout).toMatch(/^prdr v\d+\.\d+\.\d+\n$/u);
+    expect(skill.exitCode).toBe(0);
+    expect(skill.stdout).toContain('name: prdr');
+    expect(skill.stderr).toBe('');
   });
 
   it('emits one versioned agent line and keeps the exact Markdown body', async () => {
@@ -205,7 +255,7 @@ describe('CLI process contract', () => {
     expect(result.stdout).not.toContain('\u2028');
     expect(result.stdout).not.toContain('\u202E');
     const envelope = decodeEnvelope(result.stdout);
-    expect(envelope).toMatchObject({ command: 'comment', ok: true, protocolVersion: 1 });
+    expect(envelope).toMatchObject({ command: 'comment', ok: true, protocolVersion: 2 });
     if (!envelope.ok) {
       throw new Error('The CLI returned a failure envelope.');
     }
@@ -226,7 +276,7 @@ describe('CLI process contract', () => {
     expect(decodeEnvelope(result.stdout)).toMatchObject({
       command: 'comment',
       ok: true,
-      protocolVersion: 1,
+      protocolVersion: 2,
     });
   });
 
@@ -243,7 +293,7 @@ describe('CLI process contract', () => {
       command: 'comment',
       error: { code: 'MarkdownInputError' },
       ok: false,
-      protocolVersion: 1,
+      protocolVersion: 2,
     });
   });
 
@@ -257,7 +307,7 @@ describe('CLI process contract', () => {
       command: 'list',
       error: { code: 'CliUsageError' },
       ok: false,
-      protocolVersion: 1,
+      protocolVersion: 2,
     });
   });
 
@@ -265,7 +315,7 @@ describe('CLI process contract', () => {
     const fakeDirectory = makeFakeGh();
     const pathValue = `${fakeDirectory}${path.delimiter}${process.env['PATH'] ?? ''}`;
     const list = await runCli(
-      ['list', '--repo', 'example/prdr', '--pr', '42', '--agent'],
+      ['list', '--repo', 'example/prdr', '--pr', '42', '--state', 'all', '--agent'],
       '',
       pathValue,
     );
@@ -297,12 +347,19 @@ describe('CLI process contract', () => {
     if (!listEnvelope.ok) {
       throw new Error('The list command returned a failure envelope.');
     }
-    expect(Schema.decodeUnknownSync(ListPage)(listEnvelope.data)).toMatchObject({
+    expect(Schema.decodeUnknownSync(AgentListPage)(listEnvelope.data)).toMatchObject({
       hasMore: false,
-      headRefOid: '0123456789abcdef0123456789abcdef01234567',
-      limit: 50,
+      items: [
+        {
+          author: 'greptile-apps[bot]',
+          provider: 'greptile',
+          ref: 'issue-comment:2',
+          state: 'unthreaded',
+          summary: 'Confidence Score: 4/5...',
+        },
+      ],
       nextCursor: null,
-      target: { nameWithOwner: 'example/prdr', number: 42 },
+      target: { head: '0123456789abcdef0123456789abcdef01234567', pr: 42, repo: 'example/prdr' },
       total: 1,
     });
     expect(decodeEnvelope(wait.stdout)).toMatchObject({ command: 'greptile.wait', ok: true });
@@ -324,11 +381,11 @@ describe('CLI process contract', () => {
     if (!envelope.ok) {
       throw new Error('The pull request list returned a failure envelope.');
     }
-    expect(envelope.data).toMatchObject({
+    expect(Schema.decodeUnknownSync(AgentPullRequestListPage)(envelope.data)).toMatchObject({
       hasMore: false,
       items: [
         {
-          checkStatus: 'SUCCESS',
+          checks: 'success',
           number: 42,
           summary: 'Compact pull request description.',
           title: 'Test pull request',
@@ -336,6 +393,69 @@ describe('CLI process contract', () => {
       ],
       nextCursor: null,
       total: 1,
+    });
+  });
+
+  it('uses task-focused agent reads and keeps complete objects in JSON mode', async () => {
+    const fakeDirectory = makeFakeGh();
+    const pathValue = `${fakeDirectory}${path.delimiter}${process.env['PATH'] ?? ''}`;
+    const agentShow = await runCli(
+      ['show', 'issue-comment:2', '--repo', 'example/prdr', '--pr', '42', '--agent'],
+      '',
+      pathValue,
+    );
+    const jsonShow = await runCli(
+      ['show', 'issue-comment:2', '--repo', 'example/prdr', '--pr', '42', '--json'],
+      '',
+      pathValue,
+    );
+    const inspection = await runCli(
+      ['inspect', '--repo', 'example/prdr', '--pr', '42', '--agent'],
+      '',
+      pathValue,
+    );
+
+    const agentEnvelope = decodeEnvelope(agentShow.stdout);
+    const jsonEnvelope = decodeEnvelope(jsonShow.stdout);
+    const inspectEnvelope = decodeEnvelope(inspection.stdout);
+    if (!agentEnvelope.ok || !jsonEnvelope.ok || !inspectEnvelope.ok) {
+      throw new Error('A structured read returned a failure envelope.');
+    }
+    const shown = Schema.decodeUnknownSync(AgentShownComment)(agentEnvelope.data);
+    const inspected = Schema.decodeUnknownSync(AgentInspection)(inspectEnvelope.data);
+
+    expect(shown).toMatchObject({
+      author: 'greptile-apps[bot]',
+      provider: 'greptile',
+      ref: 'issue-comment:2',
+      target: { pr: 42, repo: 'example/prdr' },
+    });
+    expect(shown.body).toContain('Confidence Score: 4/5');
+    expect(agentEnvelope.data).not.toHaveProperty('comment');
+    expect(jsonEnvelope.data).toHaveProperty('comment.node_id', 'IC_2');
+    expect(inspected).toMatchObject({
+      checks: { pass: 1 },
+      reviews: { open: 0, openItems: [], resolved: 0, unthreaded: 1 },
+      target: { pr: 42, repo: 'example/prdr' },
+    });
+    expect(JSON.stringify(inspected)).not.toContain('Confidence Score');
+  });
+
+  it('defaults the finding list to open review threads', async () => {
+    const fakeDirectory = makeFakeGh();
+    const result = await runCli(
+      ['list', '--repo', 'example/prdr', '--pr', '42', '--agent'],
+      '',
+      `${fakeDirectory}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    );
+    const envelope = decodeEnvelope(result.stdout);
+    if (!envelope.ok) {
+      throw new Error('The list command returned a failure envelope.');
+    }
+
+    expect(Schema.decodeUnknownSync(AgentListPage)(envelope.data)).toMatchObject({
+      items: [],
+      total: 0,
     });
   });
 

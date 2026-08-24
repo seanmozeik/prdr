@@ -4,9 +4,10 @@ import { Effect, Schema } from 'effect';
 
 import { ListPaginationError } from './errors';
 import { type ListFilters, listReviewItems, type ReviewListItem } from './listing';
-import type { ConversationSnapshot, PullRequestTarget } from './model';
+import { providerValues, type PullRequestTarget } from './model';
+import type { ReviewListingSource } from './review-index';
 
-const CURSOR_VERSION = 1 as const;
+const CURSOR_VERSION = 2 as const;
 const MAXIMUM_CURSOR_LENGTH = 4096;
 const MAXIMUM_PAGE_SIZE = 100;
 export const DEFAULT_PAGE_SIZE = 50;
@@ -23,7 +24,7 @@ const ListCursor = Schema.Struct({
   host: Schema.NonEmptyString,
   nameWithOwner: Schema.NonEmptyString,
   number: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
-  provider: Schema.Literals(['all', 'aikido', 'greptile', 'human', 'other-bot']),
+  provider: Schema.Literals(['all', ...providerValues]),
   ref: CursorReference,
   state: Schema.Literals(['all', 'open', 'resolved', 'unthreaded']),
   version: Schema.Literal(CURSOR_VERSION),
@@ -99,7 +100,7 @@ const encodeCursor = (cursor: ListCursor): string =>
 
 const cursorMatchesRequest = (
   cursor: ListCursor,
-  snapshot: ConversationSnapshot,
+  snapshot: ReviewListingSource,
   filters: ListFilters,
 ): boolean => {
   const normalized = normalizedFilters(filters);
@@ -115,7 +116,7 @@ const cursorMatchesRequest = (
 };
 
 export const paginateReviewItems = Effect.fn('List.paginateItems')(function* paginateReviewItems(
-  snapshot: ConversationSnapshot,
+  snapshot: ReviewListingSource,
   filters: ListFilters,
   options: PreparedListPageOptions,
 ) {

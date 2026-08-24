@@ -124,13 +124,26 @@ describe('release archive', () => {
     const tarball = path.join(directory, `seanmozeik-prdr-${pkg.version}.tgz`);
     const archive = new Bun.Archive(await Bun.file(tarball).bytes());
     const files = await archive.files();
-    expect(Array.from(files.keys()).toSorted()).toEqual([
+    const packedPaths = Array.from(files.keys()).toSorted();
+    const chunkPaths = packedPaths.filter((file) => file.startsWith('package/dist/chunks/'));
+    expect(packedPaths.filter((file) => !file.startsWith('package/dist/chunks/'))).toEqual([
       'package/LICENSE',
       'package/README.md',
       'package/dist/prdr.js',
       'package/package.json',
       'package/skills/prdr/SKILL.md',
     ]);
+    expect(chunkPaths.length).toBeGreaterThan(0);
+    expect(
+      chunkPaths.every((file) =>
+        /^package\/dist\/chunks\/[A-Za-z0-9_-]+-[A-Za-z0-9]+\.js$/u.test(file),
+      ),
+    ).toBe(true);
+    const launcherFile = files.get('package/dist/prdr.js');
+    if (launcherFile === undefined) {
+      throw new Error('The packed package has no CLI launcher.');
+    }
+    expect(launcherFile.size).toBeLessThan(16 * 1024);
     const manifestFile = files.get('package/package.json');
     if (manifestFile === undefined) {
       throw new Error('The packed package has no package.json file.');
@@ -166,9 +179,18 @@ describe('release archive', () => {
     const executable = path.join(consumer, 'node_modules', '.bin', 'prdr');
     const version = Bun.spawnSync([executable, '--version'], { cwd: consumer, stdout: 'pipe' });
     const help = Bun.spawnSync([executable, '--help'], { cwd: consumer, stdout: 'pipe' });
+    const skill = Bun.spawnSync([executable, 'skill'], { cwd: consumer, stdout: 'pipe' });
+    const commandHelp = Bun.spawnSync([executable, 'list', '--help'], {
+      cwd: consumer,
+      stdout: 'pipe',
+    });
     expect(version.exitCode).toBe(0);
     expect(new TextDecoder().decode(version.stdout)).toBe(`prdr v${pkg.version}\n`);
     expect(help.exitCode).toBe(0);
     expect(new TextDecoder().decode(help.stdout)).toContain('USAGE');
+    expect(skill.exitCode).toBe(0);
+    expect(new TextDecoder().decode(skill.stdout)).toContain('name: prdr');
+    expect(commandHelp.exitCode).toBe(0);
+    expect(new TextDecoder().decode(commandHelp.stdout)).toContain('prdr list');
   });
 });

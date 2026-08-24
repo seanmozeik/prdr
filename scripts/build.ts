@@ -32,7 +32,18 @@ rmSync(distDir, { force: true, recursive: true });
 mkdirSync(distDir, { recursive: true });
 
 const cli = Bun.spawnSync(
-  ['bun', 'build', entry, '--target', 'bun', '--outfile', binPath, '--minify'],
+  [
+    'bun',
+    'build',
+    entry,
+    '--target=bun',
+    '--format=esm',
+    '--splitting',
+    `--outdir=${distDir}`,
+    `--entry-naming=${CLI_BUNDLE_NAME}`,
+    '--chunk-naming=chunks/[name]-[hash].[ext]',
+    '--minify',
+  ],
   { cwd: root, stderr: 'inherit', stdout: 'inherit' },
 );
 if (cli.exitCode !== 0) {
@@ -53,16 +64,20 @@ const tarPath = path.join(root, 'artifacts', tarName);
 
 const archiveEntries: ArchiveEntry[] = [
   {
-    data: await Bun.file(outPath).bytes(),
-    mode: 0o755,
-    path: `${archiveInner}/dist/${CLI_BUNDLE_NAME}`,
-  },
-  {
     data: await Bun.file(path.join(root, 'package.json')).bytes(),
     mode: 0o644,
     path: `${archiveInner}/package.json`,
   },
 ];
+const distFiles = new Bun.Glob('**/*');
+for await (const relativePath of distFiles.scan({ cwd: distDir, onlyFiles: true })) {
+  const normalizedPath = relativePath.replaceAll('\\', '/');
+  archiveEntries.push({
+    data: await Bun.file(path.join(distDir, relativePath)).bytes(),
+    mode: normalizedPath === CLI_BUNDLE_NAME ? 0o755 : 0o644,
+    path: `${archiveInner}/dist/${normalizedPath}`,
+  });
+}
 const skillRoot = path.join(root, 'skills');
 const skillFiles = new Bun.Glob('**/*');
 for await (const relativePath of skillFiles.scan({ cwd: skillRoot, onlyFiles: true })) {

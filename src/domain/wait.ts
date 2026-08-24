@@ -5,8 +5,9 @@ import {
   ProviderWaitInputError,
   ProviderWaitTimeoutError,
 } from './errors';
-import type { GreptileSnapshot, GreptileWaitResult, PullRequestContext } from './model';
+import type { GreptileWaitResult, PullRequestTarget } from './model';
 import { greptileStatus } from './providers';
+import type { GreptileStatusSource, ReviewIndex } from './review-index';
 
 const MINIMUM_SHA_LENGTH = 7;
 const MAXIMUM_INTERVAL_SECONDS = 300;
@@ -18,11 +19,13 @@ export interface GreptileWaitOptions {
   readonly timeoutSeconds: number;
 }
 
-export type GreptileSnapshotLoader<E, R> = (
-  context: PullRequestContext,
-) => Effect.Effect<GreptileSnapshot, E, R>;
+type GreptileWaitSnapshot = GreptileStatusSource & Pick<ReviewIndex, 'target'>;
 
-export type PullRequestContextLoader<E, R> = () => Effect.Effect<PullRequestContext, E, R>;
+export type GreptileSnapshotLoader<E, R> = (
+  target: PullRequestTarget,
+) => Effect.Effect<GreptileWaitSnapshot, E, R>;
+
+export type PullRequestTargetLoader<E, R> = () => Effect.Effect<PullRequestTarget, E, R>;
 
 export const matchesReviewedCommit = (head: string, reviewed: string | null): boolean =>
   reviewed !== null &&
@@ -61,14 +64,14 @@ const validateOptions = Effect.fn('Provider.validateGreptileWaitOptions')(functi
   return yield* Effect.void;
 });
 
-export const waitForGreptile = <EC, RC, ES, RS>(
+export const waitForGreptile = <ET, RT, ES, RS>(
   options: GreptileWaitOptions,
-  loadContext: PullRequestContextLoader<EC, RC>,
+  loadTarget: PullRequestTargetLoader<ET, RT>,
   loadSnapshot: GreptileSnapshotLoader<ES, RS>,
 ): Effect.Effect<
   GreptileWaitResult,
-  EC | ES | ProviderWaitHeadChangedError | ProviderWaitInputError | ProviderWaitTimeoutError,
-  RC | RS
+  ES | ET | ProviderWaitHeadChangedError | ProviderWaitInputError | ProviderWaitTimeoutError,
+  RS | RT
 > =>
   Effect.gen(function* waitForGreptileGen() {
     yield* validateOptions(options);
@@ -78,14 +81,16 @@ export const waitForGreptile = <EC, RC, ES, RS>(
     let attempts = 0;
 
     const poll = Effect.gen(function* greptilePollGen() {
-      let context = yield* loadContext();
-      const expectedHead = context.pullRequest.headRefOid;
-      timedHead = expectedHead;
+      const target = yield* loadTarget();
+      let expectedHead: string | null = null;
       for (;;) {
-        const snapshot = yield* loadSnapshot(context);
+        const snapshot = yield* loadSnapshot(target);
         attempts += 1;
         const currentHead = snapshot.pullRequest.headRefOid;
-        if (currentHead !== expectedHead) {
+        if (expectedHead === null) {
+          expectedHead = currentHead;
+          timedHead = currentHead;
+        } else if (currentHead !== expectedHead) {
           return yield* ProviderWaitHeadChangedError.make({
             after: currentHead,
             before: expectedHead,
@@ -103,7 +108,6 @@ export const waitForGreptile = <EC, RC, ES, RS>(
           } satisfies GreptileWaitResult;
         }
         yield* Effect.sleep(Duration.millis(intervalMilliseconds));
-        context = { pullRequest: snapshot.pullRequest, target: snapshot.target };
       }
     });
 

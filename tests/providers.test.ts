@@ -66,7 +66,7 @@ describe('Greptile wait', () => {
     const result = await Effect.runPromise(
       waitForGreptile(
         { intervalSeconds: 1, timeoutSeconds: 10 },
-        () => Effect.succeed(initialContext),
+        () => Effect.succeed(initialContext.target),
         () =>
           Effect.sync(() => {
             calls += 1;
@@ -85,7 +85,7 @@ describe('Greptile wait', () => {
     const program = Effect.gen(function* testProgram() {
       const fiber = yield* waitForGreptile(
         { intervalSeconds: 1, timeoutSeconds: 10 },
-        () => Effect.succeed(initialContext),
+        () => Effect.succeed(initialContext.target),
         () =>
           Effect.sync(() => {
             calls += 1;
@@ -106,7 +106,7 @@ describe('Greptile wait', () => {
     const program = Effect.gen(function* testProgram() {
       const fiber = yield* waitForGreptile(
         { intervalSeconds: 1, timeoutSeconds: 2 },
-        () => Effect.succeed(initialContext),
+        () => Effect.succeed(initialContext.target),
         () => Effect.succeed(snapshot(null)),
       ).pipe(Effect.flip, Effect.forkChild);
       yield* TestClock.adjust('2 seconds');
@@ -122,7 +122,7 @@ describe('Greptile wait', () => {
     const program = Effect.gen(function* testProgram() {
       const fiber = yield* waitForGreptile(
         { intervalSeconds: 1, timeoutSeconds: 2 },
-        () => Effect.succeed(initialContext),
+        () => Effect.succeed(initialContext.target),
         () => Effect.never,
       ).pipe(Effect.flip, Effect.forkChild);
       yield* TestClock.adjust('2 seconds');
@@ -156,15 +156,22 @@ describe('Greptile wait', () => {
 
   it('stops if the pull request head changes', async () => {
     const changedHead = 'ffffffffffffffffffffffffffffffffffffffff';
-    const error = await Effect.runPromise(
-      Effect.flip(
-        waitForGreptile(
-          { intervalSeconds: 1, timeoutSeconds: 10 },
-          () => Effect.succeed(initialContext),
-          () => Effect.succeed(snapshot(null, changedHead)),
-        ),
-      ),
-    );
+    let calls = 0;
+    const program = Effect.gen(function* testProgram() {
+      const fiber = yield* waitForGreptile(
+        { intervalSeconds: 1, timeoutSeconds: 10 },
+        () => Effect.succeed(initialContext.target),
+        () =>
+          Effect.sync(() => {
+            calls += 1;
+            return snapshot(null, calls === 1 ? head : changedHead);
+          }),
+      ).pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust('1 second');
+      return yield* Fiber.join(fiber);
+    });
+
+    const error = await Effect.runPromise(program.pipe(Effect.provide(TestClock.layer())));
 
     expect(error._tag).toBe('ProviderWaitHeadChangedError');
   });
@@ -175,7 +182,7 @@ describe('Greptile wait', () => {
       Effect.flip(
         waitForGreptile(
           { intervalSeconds: 11, timeoutSeconds: 10 },
-          () => Effect.succeed(initialContext),
+          () => Effect.succeed(initialContext.target),
           () =>
             Effect.sync(() => {
               calls += 1;

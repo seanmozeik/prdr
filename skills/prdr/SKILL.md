@@ -62,15 +62,17 @@ Use qualified references from `prdr list`, such as `review-comment:123`, `issue-
 ## Read without losing Markdown
 
 Every structured result has `protocolVersion`, `ok`, `command`, and either `data` or `error`.
-`--agent` returns the envelope as one JSON line. `--json` returns the same envelope with indentation.
-Reject an unknown protocol version before parsing `data`.
+Protocol version 2 uses a task-focused `--agent` form and a complete formatted `--json` form. Reject
+an unknown protocol version before parsing `data`.
 
-`inspect --agent` returns the complete snapshot under `data`. `show` returns one object and its
-thread link under `data`. `data.comment.body` is the raw GitHub Markdown body.
+`inspect --agent` returns PR state, review counts, every open finding summary, and checks that need
+attention. It omits Markdown bodies and passing check names. `openItems` is complete and is not
+truncated. Use `inspect --json` only when raw snapshot fields are required.
 
-`list` returns its target and `headRefOid` with `data.items`, `data.total`, `data.hasMore`, and
-`data.nextCursor`. It returns 50 records by default and accepts `--limit` values from 1 to 100.
-Continue until `hasMore` is false:
+`list` defaults to open review threads. Use `--state all` when you need issue comments, submitted
+review history, unthreaded comments, or resolved threads. Empty review events are omitted. It
+returns `data.items`, `data.total`, `data.hasMore`, and `data.nextCursor`. It returns 50 records by
+default and accepts `--limit` values from 1 to 100. Continue until `hasMore` is false:
 
 ```nu
 let first = (prdr list --repo OWNER/REPOSITORY --pr 123 --state open --limit 50 --agent | from json)
@@ -81,21 +83,25 @@ Keep the same PR and filters for every page. The page size can change. A cursor 
 head commit, filters, and result set. If `ListPaginationError` says that the result changed, discard
 the partial traversal and start again without `--cursor`.
 
-Each list record has a first-line `preview` of up to 160 grapheme clusters. A trailing `...` means
-that more content exists. Use its qualified `ref` with `show` to read the exact Markdown. Do not
-treat a preview as the full finding.
+Each list record omits null and derivable fields. It includes a clean `title` and first prose
+`summary` when available. Badge markup and Markdown decoration are removed. Use its qualified `ref`
+with `show`; never treat a summary as the full finding.
 
 ```nu
 prdr show review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
-Do not remove HTML comments, `<details>` sections, code fences, indentation, or repeated blank
-lines before analysis.
+`data.body` is the selected exact raw Markdown body. It occurs once. For an inline thread,
+`data.thread.otherComments` contains each other exact body once. Do not remove HTML comments,
+`<details>` sections, code fences, indentation, or repeated blank lines before analysis. Use
+`show --json` only when raw transport fields such as `diff_hunk` are required.
 
 Useful filters:
 
 ```nu
 prdr list --state open --provider human --agent
+prdr list --state open --provider codex --agent
+prdr list --state open --provider cursor --agent
 prdr list --state open --provider greptile --agent
 prdr list --state open --provider aikido --agent
 prdr list --author reviewer-login --agent

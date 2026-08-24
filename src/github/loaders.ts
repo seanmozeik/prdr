@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 
+import { checkBucket } from '../domain/checks';
 import type { PullRequestContext, PullRequestTarget } from '../domain/model';
 import {
   CheckRollupView,
@@ -131,20 +132,6 @@ export const loadReviewThreadById = Effect.fn('Loader.loadReviewThreadById')(
     return response.data.node;
   },
 );
-
-const checkBucket = (state: string): string => {
-  const normalized = state.toUpperCase();
-  if (normalized === 'SUCCESS' || normalized === 'NEUTRAL') {
-    return 'pass';
-  }
-  if (normalized === 'SKIPPED') {
-    return 'skipping';
-  }
-  if (['EXPECTED', 'IN_PROGRESS', 'PENDING', 'QUEUED', 'WAITING'].includes(normalized)) {
-    return 'pending';
-  }
-  return normalized === 'CANCELLED' ? 'cancel' : 'fail';
-};
 
 const normalizeCheck = (check: CheckRollup): GhCheck => {
   if (check.__typename === 'StatusContext') {

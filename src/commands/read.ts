@@ -3,19 +3,18 @@ import { Argument, Command, Flag } from 'effect/unstable/cli';
 
 import { outputMode, targetOptions } from '../cli/flags';
 import { printComment, printList, printSnapshot } from '../cli/presentation';
-import { emit, loadContext, loadConversationContext, toMode } from '../cli/shared';
+import { emit, loadExactSnapshot, loadReviewIndexSnapshot, toMode } from '../cli/shared';
+import { toAgentInspection, toAgentListPage, toAgentShownComment } from '../domain/agent-output';
+import { providerValues } from '../domain/model';
 import { DEFAULT_PAGE_SIZE, paginateReviewItems, prepareListPage } from '../domain/pagination';
-import { selectComment } from '../domain/selection';
+import { selectComment, selectIndexedComment } from '../domain/selection';
 
-const providerFlag = Flag.choice('provider', [
-  'all',
-  'human',
-  'greptile',
-  'aikido',
-  'other-bot',
-]).pipe(Flag.withDefault('all'), Flag.withDescription('Filter by review provider'));
-const stateFlag = Flag.choice('state', ['all', 'open', 'resolved', 'unthreaded']).pipe(
+const providerFlag = Flag.choice('provider', ['all', ...providerValues]).pipe(
   Flag.withDefault('all'),
+  Flag.withDescription('Filter by review provider'),
+);
+const stateFlag = Flag.choice('state', ['all', 'open', 'resolved', 'unthreaded']).pipe(
+  Flag.withDefault('open'),
   Flag.withDescription('Filter by GitHub thread state'),
 );
 const authorFlag = Flag.string('author').pipe(
@@ -39,15 +38,24 @@ export const inspectCommand = Command.make(
   { ...outputMode, ...targetOptions },
   ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* inspectCommandGen() {
-      const { snapshot } = yield* loadContext({ branch, pr, repo });
       const mode = toMode(agent, json);
+      if (mode === 'json') {
+        const snapshot = yield* loadExactSnapshot({ branch, pr, repo }, true);
+        yield* Effect.sync(() => {
+          emit(mode, 'inspect', snapshot, () => {
+            printSnapshot(snapshot);
+          });
+        });
+        return;
+      }
+      const snapshot = yield* loadReviewIndexSnapshot({ branch, pr, repo }, true);
       yield* Effect.sync(() => {
-        emit(mode, 'inspect', snapshot, () => {
+        emit(mode, 'inspect', mode === 'agent' ? toAgentInspection(snapshot) : snapshot, () => {
           printSnapshot(snapshot);
         });
       });
     }),
-).pipe(Command.withDescription('Read a consistent pull request review snapshot'));
+).pipe(Command.withDescription('Inspect pull request state, review findings, and checks'));
 
 export const listCommand = Command.make(
   'list',
@@ -63,34 +71,51 @@ export const listCommand = Command.make(
   ({ agent, author, branch, cursor, json, limit, pr, provider, repo, state }) =>
     Effect.gen(function* listCommandGen() {
       const pageOptions = yield* prepareListPage({ cursor, limit });
-      const { snapshot } = yield* loadConversationContext({ branch, pr, repo });
+      const snapshot = yield* loadReviewIndexSnapshot({ branch, pr, repo }, false);
       const filters = { author, provider, state } as const;
       const page = yield* paginateReviewItems(snapshot, filters, pageOptions);
       const mode = toMode(agent, json);
       yield* Effect.sync(() => {
-        emit(mode, 'list', page, () => {
+        emit(mode, 'list', mode === 'agent' ? toAgentListPage(page) : page, () => {
           printList(page);
         });
       });
     }),
-).pipe(Command.withDescription('List a cursor-paged set of findings with qualified references'));
+).pipe(Command.withDescription('List cursor-paged review findings; defaults to open threads'));
 
 export const showCommand = Command.make(
   'show',
   { ...outputMode, ...targetOptions, reference: referenceArgument },
   ({ agent, branch, json, pr, reference, repo }) =>
     Effect.gen(function* showCommandGen() {
-      const { snapshot } = yield* loadConversationContext({ branch, pr, repo });
-      const selection = yield* selectComment(snapshot, reference);
       const mode = toMode(agent, json);
-      yield* Effect.sync(() => {
-        emit(mode, 'show', selection, () => {
-          printComment(selection);
+      if (mode === 'json') {
+        const snapshot = yield* loadExactSnapshot({ branch, pr, repo }, false);
+        const selection = yield* selectComment(snapshot, reference);
+        yield* Effect.sync(() => {
+          emit(mode, 'show', selection, () => {
+            printComment(selection);
+          });
         });
+        return;
+      }
+      const snapshot = yield* loadReviewIndexSnapshot({ branch, pr, repo }, false);
+      const selection = yield* selectIndexedComment(snapshot, reference);
+      yield* Effect.sync(() => {
+        emit(
+          mode,
+          'show',
+          mode === 'agent'
+            ? toAgentShownComment(snapshot.target, snapshot.pullRequest.headRefOid, selection)
+            : selection,
+          () => {
+            printComment(selection);
+          },
+        );
       });
     }),
 ).pipe(
   Command.withDescription(
-    'Show a safe rendered comment; use --agent or --json for the exact raw Markdown body',
+    'Show a safe rendered comment; structured output keeps exact raw Markdown',
   ),
 );

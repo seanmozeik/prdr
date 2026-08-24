@@ -7,8 +7,19 @@ import type {
   RestActor,
 } from './raw';
 
-export type Provider = 'aikido' | 'greptile' | 'human' | 'other-bot';
-export type FindingSeverity = 'critical' | 'high' | 'info' | 'low' | 'medium' | 'unknown';
+export const providerValues = [
+  'aikido',
+  'codex',
+  'cursor',
+  'greptile',
+  'human',
+  'other-bot',
+] as const;
+export type Provider = (typeof providerValues)[number];
+
+export const knownFindingSeverityValues = ['critical', 'high', 'info', 'low', 'medium'] as const;
+export const findingSeverityValues = [...knownFindingSeverityValues, 'unknown'] as const;
+export type FindingSeverity = (typeof findingSeverityValues)[number];
 export type CommentKind = 'issue-comment' | 'review' | 'review-comment';
 
 export interface RepositoryTarget {

@@ -3,21 +3,15 @@ import { Argument, Command, Flag } from 'effect/unstable/cli';
 
 import { markdownOptions, outputMode, targetOptions } from '../cli/flags';
 import { printMutation } from '../cli/presentation';
-import {
-  emit,
-  loadAikidoContext,
-  loadGreptileContext,
-  loadThreadContext,
-  toMode,
-} from '../cli/shared';
+import { emit, loadMutationContext, loadReviewIndexSnapshot, toMode } from '../cli/shared';
 import { UnsupportedMutationError } from '../domain/errors';
 import { aikidoIgnoreBody, readMarkdown, withGreptileMention } from '../domain/markdown';
 import { aikidoStatus, greptileStatus } from '../domain/providers';
 import { selectThread } from '../domain/selection';
 import { waitForGreptile } from '../domain/wait';
-import { loadGreptileSnapshot } from '../github/loaders';
 import { createIssueComment, replyToThread } from '../github/mutations';
-import { resolvePullRequest, resolvePullRequestContext } from '../github/target';
+import { loadReviewIndexForTarget } from '../github/review-index';
+import { resolvePullRequestTarget } from '../github/target';
 import { sanitizeTerminalLine } from '../lib/tty';
 
 const referenceArgument = Argument.string('reference').pipe(
@@ -49,7 +43,7 @@ const greptileStatusCommand = Command.make(
   { ...outputMode, ...targetOptions },
   ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* greptileStatusCommandGen() {
-      const { snapshot } = yield* loadGreptileContext({ branch, pr, repo });
+      const snapshot = yield* loadReviewIndexSnapshot({ branch, pr, repo }, false);
       const status = greptileStatus(snapshot);
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.status', status, () => {
@@ -71,7 +65,7 @@ const greptileTriggerCommand = Command.make(
   { ...outputMode, ...targetOptions },
   ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* greptileTriggerCommandGen() {
-      const target = yield* resolvePullRequest(repo, pr, branch);
+      const target = yield* resolvePullRequestTarget(repo, pr, branch);
       const created = yield* createIssueComment(target, '@greptileai review this pull request');
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.trigger', created, () => {
@@ -87,7 +81,7 @@ const greptileAskCommand = Command.make(
   ({ agent, bodyFile, branch, json, pr, repo, stdin }) =>
     Effect.gen(function* greptileAskCommandGen() {
       const body = withGreptileMention(yield* readMarkdown({ bodyFile, stdin }));
-      const target = yield* resolvePullRequest(repo, pr, branch);
+      const target = yield* resolvePullRequestTarget(repo, pr, branch);
       const created = yield* createIssueComment(target, body);
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.ask', created, () => {
@@ -109,8 +103,8 @@ const greptileWaitCommand = Command.make(
     Effect.gen(function* greptileWaitCommandGen() {
       const result = yield* waitForGreptile(
         { intervalSeconds, timeoutSeconds },
-        () => resolvePullRequestContext(repo, pr, branch),
-        loadGreptileSnapshot,
+        () => resolvePullRequestTarget(repo, pr, branch),
+        (target) => loadReviewIndexForTarget(target, false),
       );
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.wait', result, () => {
@@ -137,7 +131,7 @@ const aikidoStatusCommand = Command.make(
   { ...outputMode, ...targetOptions },
   ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* aikidoStatusCommandGen() {
-      const { snapshot } = yield* loadAikidoContext({ branch, pr, repo });
+      const snapshot = yield* loadReviewIndexSnapshot({ branch, pr, repo }, true);
       const status = aikidoStatus(snapshot);
       yield* Effect.sync(() => {
         emitValue(agent, json, 'aikido.status', status, () => {
@@ -158,7 +152,7 @@ const aikidoIgnoreCommand = Command.make(
     Effect.gen(function* aikidoIgnoreCommandGen() {
       const reason = yield* readMarkdown({ bodyFile, stdin });
       const body = yield* aikidoIgnoreBody(reason);
-      const { snapshot, target } = yield* loadThreadContext({ branch, pr, repo });
+      const { snapshot, target } = yield* loadMutationContext({ branch, pr, repo });
       const thread = yield* selectThread(snapshot, reference);
       if (thread.root.metadata.provider !== 'aikido') {
         return yield* UnsupportedMutationError.make({

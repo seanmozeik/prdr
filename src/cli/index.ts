@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import pkg from '../../package.json' with { type: 'json' };
+import { version } from '../../package.json' with { type: 'json' };
 
 const help = `DESCRIPTION
   Read and update GitHub pull request review conversations safely
@@ -9,8 +9,8 @@ USAGE
 
 SUBCOMMANDS
   prs          List cursor-paged pull requests with compact status summaries
-  inspect      Read a consistent pull request review snapshot
-  list         List cursor-paged review findings with qualified references
+  inspect      Inspect pull request state, review findings, and checks
+  list         List cursor-paged review findings; defaults to open threads
   show         Render one comment safely; --agent and --json keep exact raw Markdown
   comment      Create a pull request issue comment from exact Markdown input
   reply        Reply to an inline review thread from exact Markdown input
@@ -28,10 +28,13 @@ const arguments_ = process.argv.slice(2);
 const [first] = arguments_;
 
 if (first === '--version' || first === '-v') {
-  process.stdout.write(`prdr v${pkg.version}\n`);
+  process.stdout.write(`prdr v${version}\n`);
 } else if (first === undefined || first === '--help' || first === '-h') {
   process.stdout.write(`${help}\n`);
+} else if (first === 'skill' && arguments_.length === 1) {
+  const { printSkill } = await import('./skill-content');
+  printSkill();
 } else {
   const { runCli } = await import('./app');
-  runCli();
+  runCli(version);
 }

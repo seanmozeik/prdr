@@ -2,11 +2,11 @@ import { Flag } from 'effect/unstable/cli';
 
 export const jsonFlag = Flag.boolean('json').pipe(
   Flag.withDefault(false),
-  Flag.withDescription('Print pretty JSON output'),
+  Flag.withDescription('Print complete formatted JSON output'),
 );
 export const agentFlag = Flag.boolean('agent').pipe(
   Flag.withDefault(false),
-  Flag.withDescription('Print compact single-line JSON for agents'),
+  Flag.withDescription('Print task-focused single-line JSON for agents'),
 );
 export const outputMode = { agent: agentFlag, json: jsonFlag };
 

@@ -4,6 +4,7 @@ import { Command, Flag } from 'effect/unstable/cli';
 import { outputMode, repositoryFlag } from '../cli/flags';
 import { printPullRequestList } from '../cli/presentation';
 import { emit, toMode } from '../cli/shared';
+import { toAgentPullRequestListPage } from '../domain/agent-output';
 import { DEFAULT_PULL_REQUEST_PAGE_SIZE, listPullRequests } from '../github/pull-requests';
 
 const baseFlag = Flag.string('base').pipe(
@@ -41,8 +42,9 @@ export const pullRequestsCommand = Command.make(
   ({ agent, base, branch, cursor, json, limit, repo, state }) =>
     Effect.gen(function* pullRequestsCommandGen() {
       const page = yield* listPullRequests(repo, { base, branch, state }, { cursor, limit });
+      const mode = toMode(agent, json);
       yield* Effect.sync(() => {
-        emit(toMode(agent, json), 'prs', page, () => {
+        emit(mode, 'prs', mode === 'agent' ? toAgentPullRequestListPage(page) : page, () => {
           printPullRequestList(page);
         });
       });

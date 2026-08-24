@@ -103,6 +103,15 @@ describe('pull request listing', () => {
     expect(summary).not.toHaveProperty('body');
   });
 
+  it('removes badge HTML and Markdown decoration from a body summary', () => {
+    const summary = summarizePullRequest(
+      record({ body: '<img alt="P1" src="badge.svg">\n\n- **Fix** the pagination boundary.' }),
+      Date.parse('2026-08-24T10:00:00Z'),
+    );
+
+    expect(summary.summary).toBe('Fix the pagination boundary.');
+  });
+
   it('pages through pull requests with a cursor bound to the repository and filters', async () => {
     const filters = { base: 'main', branch: 'fix/pagination', state: 'open' } as const;
     const { captured, result } = runWithHandler(

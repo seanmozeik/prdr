@@ -16,16 +16,18 @@ comment writes.
   and viewer permissions from `PullRequestReviewThread`.
 - Each GitHub object has a qualified reference. Examples are `review-comment:123`,
   `issue-comment:456`, `review:789`, and `thread:PRRT_...`.
-- Raw Markdown bodies stay unchanged in `--agent` and `--json` output. `prdr` does not strip HTML
-  comments, `<details>` blocks, code fences, indentation, or blank lines.
+- `show --agent` returns the selected raw Markdown body once. It does not strip HTML comments,
+  `<details>` blocks, code fences, indentation, or blank lines. `--json` keeps the full GitHub data.
 - Every write takes a file or standard input, encodes a typed JSON request, and passes it to
   `gh api --input -`. A Markdown body is never placed in a shell command string.
-- A snapshot accepts only two equal consecutive reads on one pull request head. If the first pair
-  differs, one third complete read is the bounded retry.
+- Summary commands read one GraphQL review graph and page each GitHub connection independently.
+  Exact snapshots batch that graph with REST-only inline comment fields, reject any overlap or
+  count mismatch, and verify the pull request head and update time. A third attempt is the bound
+  when concurrent review activity prevents a stable result.
 - Pull request and review-item lists have opaque cursors. Agents can keep each response bounded
   without losing the rest of the result set.
-- Bot detection uses known provider identities and GitHub actor type. A human login that contains
-  the text `bot` is still a human.
+- Bot detection recognizes Aikido, Codex, Cursor, and Greptile identities, then uses the GitHub actor
+  type for other bots. A human login that contains the text `bot` is still a human.
 
 GitHub documents the thread fields and resolve mutations in its
 [`PullRequestReviewThread` GraphQL reference](https://docs.github.com/en/graphql/reference/objects#pullrequestreviewthread).
@@ -40,8 +42,9 @@ and GitHub's [raw review comment API](https://docs.github.com/en/rest/pulls/comm
 - `@seanmozeik/de-clank` 0.1.5
 - Oxlint 1.80 and Oxfmt 0.65
 
-The small CLI launcher answers root `--help` and `--version` without loading Effect. The full
-Effect runtime loads only for real commands.
+The small CLI launcher answers root `--help` and `--version` without loading Effect. The build
+keeps the full Effect application in a deferred chunk that loads only for real commands. A release
+test keeps the launcher below 16 KiB so that a new eager import cannot silently slow the fast path.
 
 ## Install for development
 
@@ -74,7 +77,8 @@ bun run build -- --no-formula
 Use an explicit repository and pull request when the agent already knows them. `--repo` accepts
 `OWNER/REPOSITORY` or `HOST/OWNER/REPOSITORY`. Select one pull request with `--pr NUMBER` or
 `--branch HEAD_BRANCH`; those selectors are mutually exclusive. Omit all three flags to infer the
-pull request from the current worktree.
+pull request from the current worktree. The explicit `--repo` and `--pr` pair is the fastest path
+because it does not need a separate target-resolution request.
 
 ```nu
 prdr prs --repo OWNER/REPOSITORY --state open --limit 30 --agent
@@ -84,26 +88,34 @@ prdr list --repo OWNER/REPOSITORY --pr 123 --state open --limit 50 --agent
 prdr show review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
-Use `--agent` for compact one-line JSON, `--json` for formatted JSON, or no output flag for terminal
-output. Both structured modes use one versioned protocol:
+Use `--agent` for task-focused one-line JSON. It removes raw GitHub IDs, URLs, null fields, repeated
+bodies, diff hunks, and fields that a qualified reference already identifies. Use `--json` for the
+complete formatted diagnostic form. Both modes use protocol version 2 at the top level:
 
 ```json
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "ok": true,
   "command": "list",
   "data": {
     "hasMore": true,
-    "headRefOid": "0123456789abcdef0123456789abcdef01234567",
-    "items": [{ "ref": "review-comment:123", "preview": "Keep Markdown exact..." }],
-    "limit": 50,
+    "items": [
+      {
+        "author": "chatgpt-codex-connector[bot]",
+        "provider": "codex",
+        "ref": "review-comment:123",
+        "severity": "medium",
+        "state": "open",
+        "summary": "The write happens before the report is ready.",
+        "thread": "thread:PRRT_example",
+        "title": "Delay dismissal until the report is ready"
+      }
+    ],
     "nextCursor": "OPAQUE_CURSOR",
     "target": {
-      "host": "github.com",
-      "name": "REPOSITORY",
-      "nameWithOwner": "OWNER/REPOSITORY",
-      "number": 123,
-      "owner": "OWNER"
+      "head": "0123456789abcdef0123456789abcdef01234567",
+      "pr": 123,
+      "repo": "OWNER/REPOSITORY"
     },
     "total": 81
   }
@@ -112,20 +124,31 @@ output. Both structured modes use one versioned protocol:
 
 Failures use the same top-level contract and put `code`, `message`, and `details` under `error`.
 Consumers must reject an unknown protocol version before they read `data`. Human `show` output is a
-safe rendered view that removes terminal control bytes. Use `--agent` or `--json` when you need the
-exact raw body. `inspect --agent` returns the complete, unpaged snapshot under `data`.
+safe rendered view that removes terminal control bytes.
 
-`prs` returns pull requests ordered by recent updates. Each compact item includes its number,
-title, first useful body line, age in days, author, head and base branches, draft and lifecycle
-state, review decision, merge state, check-rollup state, comment count, and review-thread count.
+`inspect --agent` returns pull request state, review counts, every open finding summary, and only
+checks that need attention. It does not return Markdown bodies or passing check names. It does not
+truncate `openItems`. Use `inspect --json` when you need the complete snapshot.
+
+`show --agent` returns the selected exact body once under `data.body`. For an inline thread, it puts
+each other comment once under `data.thread.otherComments`. It omits repeated roots, diff hunks, node
+IDs, and other transport fields. Use `show --json` when those raw fields are required.
+
+`prs --agent` returns pull requests ordered by recent updates. Each item includes its number, title,
+optional summary, age in days, author, head and base branches, status, review decision, merge state,
+check state, comment count, and review-thread count.
 Filter by `--state`, `--base`, or `--branch`. The default page size is 30 and the maximum is 100.
 Use `data.nextCursor` in the next call while `data.hasMore` is true. The cursor binds to the
 repository and filters.
 
-`list` returns a cursor-paged object under `data`. The object identifies its target and
-`headRefOid`. It returns 50 records by default and accepts a `--limit` from 1 to 100. Each record has
-a `preview` of its first content line, up to 160 grapheme clusters. A preview ends in `...` when
-more content exists. It never replaces the exact Markdown available through `show`.
+`list` defaults to open review threads. Pass `--state all` for issue comments, submitted review
+history, unthreaded comments, and resolved threads. Empty submitted review events are omitted.
+`codex` and `cursor` are provider filter values. Each agent record has a clean title and first prose
+summary when they exist. Badge HTML and Markdown decoration are removed from these summaries. The
+exact source Markdown remains available through `show`.
+
+`list` returns 50 records by default and accepts a `--limit` from 1 to 100. `list` and `prs` are the
+bounded read commands. Both return `hasMore` and `nextCursor`; continue until `hasMore` is false.
 
 Use `data.nextCursor` while `data.hasMore` is true. Keep the same PR and filters on each request:
 

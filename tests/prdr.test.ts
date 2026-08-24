@@ -18,6 +18,7 @@ import type {
   RawReviewComment,
 } from '../src/domain/raw';
 import { selectComment, selectThread } from '../src/domain/selection';
+import { findingPreview } from '../src/domain/text';
 import { GhClient, type GhRequest } from '../src/github/client';
 import { createIssueComment } from '../src/github/mutations';
 import { composeSnapshot } from '../src/github/snapshot';
@@ -140,6 +141,8 @@ describe('provider parsing', () => {
   it('uses exact known bot identities', () => {
     expect(providerFor('greptile-apps[bot]', 'Bot')).toBe('greptile');
     expect(providerFor('aikido-pr-checks[bot]', 'Bot')).toBe('aikido');
+    expect(providerFor('chatgpt-codex-connector[bot]', 'Bot')).toBe('codex');
+    expect(providerFor('cursor[bot]', 'Bot')).toBe('cursor');
     expect(providerFor('robotics-reviewer', 'User')).toBe('human');
     expect(providerFor('another-reviewer[bot]', 'Bot')).toBe('other-bot');
   });
@@ -163,6 +166,39 @@ describe('provider parsing', () => {
     expect(metadata.title?.endsWith('...')).toBe(true);
     expect(metadata.title).toHaveLength(160);
     expect(body).toEndWith('Exact body');
+  });
+
+  it('turns production agent markup into a clean title and prose preview', () => {
+    const codexBody =
+      '**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub></sub> Delay dismissal until ready**\n\n' +
+      'The current write happens before the report is available.\n\nUseful? React with 👍 / 👎.';
+    const codex = findingMetadata('chatgpt-codex-connector[bot]', codexBody, 'Bot');
+    const humanBody = '## Production data on the guard\n\nFive in six refused calls are valid.';
+    const human = findingMetadata('reviewer', humanBody, 'User');
+
+    expect(codex).toEqual({
+      provider: 'codex',
+      severity: 'medium',
+      title: 'Delay dismissal until ready',
+    });
+    expect(findingPreview(codexBody, codex.title)).toBe(
+      'The current write happens before the report is available.',
+    );
+    expect(human.title).toBe('Production data on the guard');
+    expect(findingPreview(humanBody, human.title)).toBe('Five in six refused calls are valid.');
+  });
+
+  it('skips agent section labels when it selects a summary', () => {
+    const body =
+      '<img alt="P1"> **T-Rex could not upload its artifact**\n\n' +
+      '- **Bug**\n  - T-Rex could not upload its artifact\n' +
+      '- **Cause**\n  - The local run returned no public reference.\n' +
+      '- **Fix**\n  - Run the check again.';
+    const metadata = findingMetadata('greptile-apps[bot]', body, 'Bot');
+
+    expect(findingPreview(body, metadata.title)).toBe(
+      'The local run returned no public reference...',
+    );
   });
 });
 

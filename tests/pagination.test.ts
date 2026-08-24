@@ -139,6 +139,15 @@ describe('review list pagination', () => {
     expect(second.items.map((item) => item.ref)).toEqual(['issue-comment:1']);
   });
 
+  it('omits review events that have no finding body', () => {
+    const items = listReviewItems(
+      { ...makeSnapshot([]), reviews: [{ ...pendingReview, body: '  \n' }] },
+      filters,
+    );
+
+    expect(items).toEqual([]);
+  });
+
   it('rejects a cursor when filters or result records change', async () => {
     const snapshot = makeSnapshot();
     const firstOptions = await Effect.runPromise(prepareListPage({ cursor: '', limit: 1 }));

@@ -2,7 +2,6 @@ import { BunRuntime, BunServices } from '@effect/platform-bun';
 import { Cause, Console as EffectConsole, Effect, Layer, Schema } from 'effect';
 import { CliError, Command } from 'effect/unstable/cli';
 
-import pkg from '../../package.json' with { type: 'json' };
 import { aikidoCommand, greptileCommand } from '../commands/providers';
 import { pullRequestsCommand } from '../commands/pull-requests';
 import { inspectCommand, listCommand, showCommand } from '../commands/read';
@@ -65,13 +64,6 @@ const silentConsole = {
   error: discardCliOutput,
   log: discardCliOutput,
 } satisfies EffectConsole.Console;
-const commandProgram = Command.run(app, {
-  renderErrors: !ownsCliErrorRendering,
-  version: pkg.version,
-});
-const program = ownsCliErrorRendering
-  ? commandProgram.pipe(Effect.provideService(EffectConsole.Console, silentConsole))
-  : commandProgram;
 const runtimeLayer = Layer.mergeAll(BunServices.layer, GhClient.layer);
 
 const showHelpFromCause = (cause: Cause.Cause<unknown>): CliError.ShowHelp | undefined => {
@@ -134,35 +126,38 @@ const writeBoundaryError = (error: unknown): void => {
   process.exitCode = 1;
 };
 
-const handled = program.pipe(
-  Effect.provide(runtimeLayer),
-  Effect.catchCause((cause) =>
-    Effect.sync(() => {
-      const help = showHelpFromCause(cause);
-      if (help !== undefined) {
-        if (help.errors.length > 0) {
-          process.exitCode = 1;
-          if (structuredMode !== null) {
-            const errors = help.errors.map((error) => ({
-              code: taggedErrorCode(error) ?? 'CliError',
-              message: errorMessage(error),
-            }));
-            writeStructuredFailure(
-              structuredMode,
-              commandName(),
-              errors.map(({ message }) => message).join('; '),
-              'CliUsageError',
-              { value: { commandPath: Array.from(help.commandPath), errors } },
-            );
+export const runCli = (version: string): void => {
+  const commandProgram = Command.run(app, { renderErrors: !ownsCliErrorRendering, version });
+  const program = ownsCliErrorRendering
+    ? commandProgram.pipe(Effect.provideService(EffectConsole.Console, silentConsole))
+    : commandProgram;
+  const handled = program.pipe(
+    Effect.provide(runtimeLayer),
+    Effect.catchCause((cause) =>
+      Effect.sync(() => {
+        const help = showHelpFromCause(cause);
+        if (help !== undefined) {
+          if (help.errors.length > 0) {
+            process.exitCode = 1;
+            if (structuredMode !== null) {
+              const errors = help.errors.map((error) => ({
+                code: taggedErrorCode(error) ?? 'CliError',
+                message: errorMessage(error),
+              }));
+              writeStructuredFailure(
+                structuredMode,
+                commandName(),
+                errors.map(({ message }) => message).join('; '),
+                'CliUsageError',
+                { value: { commandPath: Array.from(help.commandPath), errors } },
+              );
+            }
           }
+          return;
         }
-        return;
-      }
-      cause.pipe(boundaryErrorFromCause, writeBoundaryError);
-    }),
-  ),
-);
-
-export const runCli = (): void => {
+        cause.pipe(boundaryErrorFromCause, writeBoundaryError);
+      }),
+    ),
+  );
   BunRuntime.runMain(handled);
 };
