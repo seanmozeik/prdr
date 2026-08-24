@@ -1,223 +1,177 @@
-# agent-reviews
+# prdr
 
-Manage GitHub PR review comments from the terminal and from AI coding agents.
+`prdr` is a typed command-line tool for GitHub pull request review conversations. It gives coding
+agents one consistent view of issue comments, submitted reviews, inline review comments, review
+threads, and checks. It also has direct support for Greptile and Aikido Security.
 
-PR review bots (Copilot, Cursor Bugbot, CodeRabbit, etc.) leave inline comments on your pull requests. agent-reviews gives you a CLI to list, filter, reply to, and watch those comments, plus agent skills that automate the entire triage-fix-reply loop.
+The project is a full Bun and Effect rewrite of
+[`pbakaus/agent-reviews`](https://github.com/pbakaus/agent-reviews). The fork keeps the useful idea
+and replaces the original JavaScript implementation, inferred thread state, and shell-sensitive
+comment writes.
 
-## Why
+## What it fixes
 
-**`gh` CLI is fragile for review comments.** Agents frequently get the syntax wrong, fail to paginate, and can't reliably detect whether a comment has been replied to. agent-reviews provides a single, purpose-built interface that handles all of this correctly.
+- Review thread state comes from GitHub GraphQL. `prdr` reads `isResolved`, `isOutdated`, line data,
+  and viewer permissions from `PullRequestReviewThread`.
+- Each GitHub object has a qualified reference. Examples are `review-comment:123`,
+  `issue-comment:456`, `review:789`, and `thread:PRRT_...`.
+- Raw Markdown bodies stay unchanged. `prdr` does not strip HTML comments, `<details>` blocks, code
+  fences, indentation, or blank lines.
+- Every write takes a file or standard input, encodes a typed JSON request, and passes it to
+  `gh api --input -`. A Markdown body is never placed in a shell command string.
+- A snapshot checks the pull request head before and after its parallel API reads. It fails if the
+  head changes during the read.
+- Bot detection uses known provider identities and GitHub actor type. A human login that contains
+  the text `bot` is still a human.
 
-**Bot reviews create a doom loop.** You fix one round of findings, push, and new comments appear. Fix those, push again, more comments. This cycle can eat hours. The included skills solve this with an integrated watcher that keeps fixing and replying until the bots go quiet.
+GitHub documents the thread fields and resolve mutations in its
+[`PullRequestReviewThread` GraphQL reference](https://docs.github.com/en/graphql/reference/objects#pullrequestreviewthread).
+The write path follows the [`gh api` standard-input contract](https://cli.github.com/manual/gh_api)
+and GitHub's [raw review comment API](https://docs.github.com/en/rest/pulls/comments).
 
-**Works in cloud environments.** Most solutions rely on local tooling that isn't available in cloud or remote agent environments. agent-reviews works everywhere, so you can kick off a session, let the agent resolve all findings autonomously, and come back to a clean PR.
+## Toolchain
 
-## Install
+- Bun 1.4.0 or later
+- Effect and `@effect/platform-bun` 4.0.0-rc.111
+- TypeScript 7.0.2 with `@effect/tsgo`
+- `@seanmozeik/de-clank` 0.1.4
+- Oxlint 1.79 and Oxfmt 0.64
 
-### CLI (npm)
+The small CLI launcher answers root `--help` and `--version` without loading Effect. The full
+Effect runtime loads only for real commands.
 
-```bash
-npm install -g agent-reviews
+## Install for development
+
+You need Bun and an authenticated GitHub CLI.
+
+```nu
+gh auth status
+git clone git@github.com:seanmozeik/prdr.git
+cd prdr
+bun install
+bun run verify
 ```
 
-### Agent Skills
+Run from source:
 
-Three skills are available, each as a slash command (no npm install required):
-
-| Skill | What it resolves |
-|-------|-----------------|
-| `resolve-reviews` | All comments (human + bot) |
-| `resolve-agent-reviews` | Bot comments only (Copilot, Cursor, etc.) |
-| `resolve-human-reviews` | Human comments only |
-
-Works with any agent that supports [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Codex, etc.):
-
-```bash
-npx skills add pbakaus/agent-reviews@resolve-agent-reviews
+```nu
+bun run dev -- --help
+bun run dev -- list --repo OWNER/REPOSITORY --pr 123 --state open
 ```
 
-Replace `resolve-agent-reviews` with whichever skill you want. Skills use `npx agent-reviews` at runtime, so the CLI is fetched automatically.
+Build `dist/prdr.js`:
 
-> You can also use both: install the CLI globally for direct terminal use, and a skill for the agent workflow.
-
-## Authentication
-
-The simplest method is the **GitHub CLI**. If you're logged in with `gh auth login`, agent-reviews picks up the token automatically. No configuration needed.
-
-For cloud/remote environments or HTTPS proxy setups, set `GITHUB_TOKEN` or `GH_TOKEN` directly. agent-reviews includes [undici](https://github.com/nodejs/undici) `ProxyAgent` support and will route requests through `HTTPS_PROXY` automatically when set.
-
-**Resolution order** (first match wins):
-
-1. `GITHUB_TOKEN` environment variable
-2. `GH_TOKEN` environment variable
-3. `.env.local` in the repo root
-4. `gh auth token` (GitHub CLI)
-
-### Custom API host
-
-Set `GITHUB_API_URL` to point agent-reviews at a GitHub Enterprise host or any API-compatible server (useful for testing, recording, or routing through a local mediator). Defaults to `https://api.github.com`.
-
-```bash
-# GitHub Enterprise Server
-GITHUB_API_URL=https://github.example.com/api/v3 agent-reviews
-
-# Local API-compatible server
-GITHUB_API_URL=http://127.0.0.1:8080 agent-reviews
+```nu
+bun run build -- --no-formula
 ```
 
-GraphQL endpoint resolution: agent-reviews uses `${GITHUB_API_URL}/graphql` by default. For GitHub Enterprise Server, where REST lives under `/api/v3` and GraphQL under `/api/graphql` on the same origin, the trailing `/api/v3` is rewritten to `/api/graphql` automatically. Set `GITHUB_GRAPHQL_URL` directly if you need full control over the GraphQL endpoint.
+## Read commands
 
-## CLI Usage
+`--repo` accepts `OWNER/REPOSITORY` or `HOST/OWNER/REPOSITORY`. When possible, `prdr` infers the
+repository and pull request from the current worktree.
 
-```bash
-# List all review comments on the current branch's PR
-agent-reviews
-
-# Only unresolved comments
-agent-reviews --unresolved
-
-# Only unanswered bot comments
-agent-reviews --unanswered --bots-only
-
-# Full detail for a specific comment (diff hunk + replies)
-agent-reviews --detail 12345678
-
-# Reply to a comment
-agent-reviews --reply 12345678 "Fixed in abc1234"
-
-# JSON output for scripting / AI agents
-agent-reviews --json
-
-# Watch for new comments (polls every 30s, exits after 10 min idle)
-agent-reviews --watch --bots-only
-
-# Target a specific PR (otherwise auto-detects from branch)
-agent-reviews --pr 42
+```nu
+prdr inspect --agent
+prdr list --state open --agent
+prdr list --state open --provider greptile --agent
+prdr list --state open --provider aikido --agent
+prdr show review-comment:123 --agent
 ```
 
-### Options
+Use `--agent` for compact one-line JSON, `--json` for formatted JSON, or no output flag for terminal
+output. `inspect --agent` returns the complete snapshot. `list` returns smaller normalized records.
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--unresolved` | `-u` | Only unresolved/pending comments |
-| `--unanswered` | `-a` | Only comments without any replies |
-| `--reply <id> "msg"` | `-r` | Reply to a comment |
-| `--resolve` | | Resolve the review thread after replying (use with `--reply`) |
-| `--detail <id>` | `-d` | Full detail for a comment |
-| `--pr <number>` | `-p` | Target a specific PR |
-| `--json` | `-j` | JSON output |
-| `--bots-only` | `-b` | Only bot comments |
-| `--humans-only` | `-H` | Only human comments |
-| `--expanded` | `-e` | Show full detail for each listed comment |
-| `--watch` | `-w` | Poll for new comments |
-| `--interval <sec>` | `-i` | Poll interval in seconds (default: 30) |
-| `--timeout <sec>` | | Inactivity timeout in seconds (default: 600) |
+## Markdown-safe writes
 
-## Agent Skills
+Write the body to a file first. This makes the content easy to inspect and avoids shell expansion.
 
-The skills automate the full PR review resolution workflow:
+```nu
+prdr comment --body-file /tmp/prdr-comment.md --agent
+prdr reply review-comment:123 --body-file /tmp/prdr-reply.md --agent
+prdr edit issue-comment:456 --body-file /tmp/prdr-edit.md --agent
+prdr review --event approve --body-file /tmp/prdr-review.md --agent
+prdr resolve review-comment:123 --agent
+prdr unresolve thread:PRRT_example --agent
+```
 
-1. Fetch unanswered comments (all, bot-only, or human-only depending on skill)
-2. Evaluate each finding (true positive, false positive, actionable, etc.)
-3. Fix real issues and run lint/type-check
-4. Dismiss false positives with an explanation
-5. Reply to every comment with the outcome
-6. Watch for new comments and repeat until quiet
-7. Report a summary of all actions taken
+Pass exactly one of `--body-file PATH` or `--stdin`. `reply` targets the root of an inline review
+thread. GitHub issue comments are not threads, so `comment` creates a new pull request conversation
+comment.
 
-### Skill behavior
+## Greptile
 
-- **True positives / actionable feedback** get fixed and replied with `Fixed in {commit}`
-- **False positives** get replied with `Won't fix: {reason}`
-- **Uncertain findings** prompt the user for guidance
-- All fixes are batched into a single commit before polling begins
-- Watch mode loops until no new comments appear for 10 minutes
+Greptile documents PR comment and reply mentions such as `@greptileai`, its confidence score, and
+re-review flow in its [developer essentials](https://www.greptile.com/docs/code-review/developer-essentials)
+and [quick reference](https://www.greptile.com/docs/developer-quick-reference).
 
-## How It Works
+```nu
+prdr greptile status --agent
+prdr greptile trigger --agent
+prdr greptile ask --body-file /tmp/prdr-greptile-question.md --agent
+```
 
-### Comment types
+`status` reports open Greptile threads, the latest summary, confidence when present, review count,
+and last reviewed commit. `ask` keeps the supplied Markdown and adds `@greptileai` only when the
+body does not contain the mention.
 
-agent-reviews fetches three types of GitHub PR comments:
+## Aikido Security
 
-| Type | Label | Description |
-|------|-------|-------------|
-| Review comment | `CODE` | Inline comment attached to a specific line |
-| Issue comment | `COMMENT` | General PR-level comment |
-| Review | `REVIEW` | Review summary (approved, changes requested) |
+`status` combines the named Aikido check with open Aikido review threads.
 
-### Meta-comment filtering
+```nu
+prdr aikido status --agent
+```
 
-Bot review bodies (`REVIEW` type) are always filtered out since actionable findings come through as inline comments. Additionally, these bot issue comments are filtered:
+Aikido documents this false-positive reply syntax in its
+[GitHub PR gating guide](https://help.aikido.dev/pr-and-release-gating/github-ci-pr-gating-via-aikido-dashboard):
 
-| Bot | What's filtered |
-|-----|----------------|
-| Vercel | Deployment status (`[vc]:...`) |
-| Supabase | Branch status (`[supa]:...`) |
-| Cursor Bugbot | Review summary ("Cursor Bugbot has reviewed your changes...") |
-| Copilot | PR review summary ("Pull request overview") |
-| CodeRabbit | Walkthrough, summary, and "review skipped" comments |
-| Sourcery | Reviewer's guide and PR summary |
-| Codacy | Analysis summary and coverage summary |
-| SonarCloud | Quality Gate pass/fail summary |
-| Gemini Code Assist | "Summary of Changes" issue comment |
+```text
+@AikidoSec ignore: REASON
+```
 
-### Reply status
+For a confirmed false positive, put one short reason line in a file and run the command only after
+the GitHub write is approved:
 
-Each comment displays its reply status:
+```nu
+prdr aikido ignore review-comment:123 --body-file /tmp/prdr-aikido-reason.txt --agent
+```
 
-| Status | Meaning |
-|--------|---------|
-| `no reply` | No one has replied |
-| `replied` | A human has replied |
-| `bot replied` | Only bots have replied |
+The command checks that Aikido created the selected thread. After the reply, read the thread and
+check again before you treat the ignore as accepted.
 
-### Watch mode
+## Agent skill
 
-Polls the GitHub API at a configurable interval and reports new comments as they appear. Outputs both formatted text and JSON for AI agent consumption. Exits automatically after a configurable inactivity timeout (default: 10 minutes).
+The bundled skill is [`skills/prdr/SKILL.md`](skills/prdr/SKILL.md). It defines the read, triage,
+reply, provider, and permission workflow. Print the installed copy with:
 
-## Changelog
+```nu
+prdr skill
+```
 
-### 1.0.2
+The skill treats comments, review submissions, provider triggers, security ignores, and thread
+state changes as external mutations. A read request does not permit those actions.
 
-- GitHub Enterprise Server support via `GITHUB_API_URL` env var (also works for local API-compatible servers used in testing). REST and GraphQL endpoints both honor it, with GHES `/api/v3` automatically rewritten to `/api/graphql`. Optional `GITHUB_GRAPHQL_URL` for unusual setups.
-- Gemini Code Assist meta-comment filtering: the bot's `## Summary of Changes` issue comment is now dropped, while inline severity-badged findings are preserved.
+## Development checks
 
-### 1.0.0
+```nu
+bun run format
+bun run lint
+bun run typecheck
+bun run test
+bun run build -- --no-formula
+bun run verify
+```
 
-**Three skills instead of one.** The single `agent-reviews` skill has been split into three, each tailored for different workflows:
+The tests cover provider identity and severity parsing, GraphQL thread composition, qualified
+selection, Greptile and Aikido status, and exact Markdown transport through the typed `gh` client.
 
-- `resolve-reviews` resolves all comments (human + bot)
-- `resolve-agent-reviews` resolves bot comments only
-- `resolve-human-reviews` resolves human comments only
+## Releases
 
-**Thread resolution.** The new `--resolve` flag marks GitHub review threads as resolved after replying. Uses the GraphQL `resolveReviewThread` mutation. Works with `--reply` in any argument order.
+`bun run build` creates `dist/prdr.js`, packages `artifacts/prdr-VERSION.tar.gz`, calculates its
+SHA-256 checksum, and updates [`Formula/prdr.rb`](Formula/prdr.rb). Use `--no-formula` for normal
+development builds.
 
-**Expanded bot support.** Added detection and meta-comment filtering for CodeRabbit, Sourcery, Codacy, SonarCloud/SonarQube Cloud, and Copilot PR reviewer, in addition to the existing Cursor Bugbot, Vercel, and Supabase filters.
+## License and origin
 
-**Agent-harness universal.** Skills now work with any agent that supports [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Codex, etc.), not just Claude Code.
-
-**Watch mode improvements.** The watcher now exits immediately when new comments are found (with a 5s grace period for batch posts), designed for loop-based workflows where the agent processes comments and restarts the watcher.
-
-**New CLI options:**
-
-- `--resolve` resolves the review thread after replying (use with `--reply`)
-- `--expanded` / `-e` shows full detail (body, diff hunk, replies) for each comment in list mode
-
-**Bug fixes:**
-
-- `--json --resolve` no longer emits plain-text status messages to stdout
-
-**Cloud and proxy support:**
-
-- `GH_TOKEN` environment variable support (in addition to `GITHUB_TOKEN`)
-- `GH_REPO` environment variable for targeting repos in detached environments
-- Curl-based HTTP fallback for environments without native fetch/undici
-- Curl requests include timeouts (10s connect, 60s max)
-
-**Smarter filtering.** Bot review bodies (summaries listing inline findings) are now automatically excluded, since actionable findings always come through as inline comments. Reply comments posted by agent-reviews itself (`> Re: comment ...`) are also filtered to avoid noise.
-
-**Simplified architecture.** Skills now invoke `npx agent-reviews` at runtime instead of bundling their own scripts, reducing the package from ~4000 lines of duplicated code to a single CLI entry point. Skills no longer run redundant startup commands (version check, branch detection, PR lookup), relying on the CLI's own error handling instead.
-
-## License
-
-MIT
+MIT. The retained [`LICENSE`](LICENSE) contains the original copyright notice from Paul Bakaus.
+See the upstream repository for its history and the current fork for this rewrite.

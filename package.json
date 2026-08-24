@@ -1,42 +1,70 @@
 {
-  "name": "agent-reviews",
-  "version": "1.0.2",
-  "description": "CLI and agent skills for managing GitHub PR review comments. List, filter, reply, and watch for bot findings.",
+  "name": "@seanmozeik/prdr",
+  "version": "0.1.0",
+  "description": "A typed GitHub pull request review CLI for coding agents.",
+  "keywords": [
+    "agent-skill",
+    "ai-agent",
+    "aikido",
+    "bun",
+    "cli",
+    "effect",
+    "github",
+    "greptile",
+    "pull-request",
+    "review-comments"
+  ],
   "license": "MIT",
-  "author": "Paul Bakaus",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pbakaus/agent-reviews.git"
+    "url": "git+https://github.com/seanmozeik/prdr.git"
   },
-  "keywords": [
-    "github",
-    "pull-request",
-    "code-review",
-    "cli",
-    "ai-agent",
-    "agent-skill",
-    "pr-comments",
-    "review-bot"
-  ],
   "bin": {
-    "agent-reviews": "bin/agent-reviews.js"
+    "prdr": "./dist/prdr.js"
   },
   "files": [
-    "bin/",
-    "lib/",
-    "skills/",
-    ".claude-plugin/"
+    "dist",
+    "skills",
+    "src"
   ],
-  "scripts": {
-    "install-skills": "node scripts/install-skills.js",
-    "prepare": "node scripts/install-skills.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
   },
-  "engines": {
-    "node": ">=18"
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "check": "bun run format && bun run lint:fix && bun run typecheck && bun run test",
+    "dev": "bun run src/cli/index.ts",
+    "prepublishOnly": "bun scripts/build.ts -- --no-formula",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "format": "oxfmt --write .",
+    "lint": "oxlint --format agent --tsconfig tsconfig.oxlint.json ./src ./tests ./scripts",
+    "lint:fix": "oxlint --format agent --tsconfig tsconfig.oxlint.json --fix ./src ./tests ./scripts",
+    "prepare": "effect-tsgo patch",
+    "format:check": "oxfmt --check .",
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build -- --no-formula"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0-rc.111",
+    "effect": "4.0.0-rc.111",
+    "typescript": "7.0.2"
   },
   "devDependencies": {
-    "vitest": "^4.0.18"
-  }
+    "@effect/tsgo": "0.36.5",
+    "@seanmozeik/de-clank": "0.1.4",
+    "@types/bun": "1.4.0",
+    "oxfmt": "0.64.0",
+    "oxlint": "1.79.0",
+    "oxlint-tsgolint": "7.0.2001"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "packageManager": "bun@1.4.0"
 }

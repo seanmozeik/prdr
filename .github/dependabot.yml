@@ -1,48 +1,26 @@
 version: 2
 updates:
-  - package-ecosystem: "npm"
-    directory: "/"
+  - package-ecosystem: 'bun'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "America/Los_Angeles"
-    open-pull-requests-limit: 3
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
+      timezone: 'Europe/London'
+    open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
-      include: "scope"
+      prefix: 'deps'
+      include: 'scope'
     groups:
-      root-dev-minor-patch:
-        dependency-type: "development"
-        update-types:
-          - "minor"
-          - "patch"
+      effect-stack:
         patterns:
-          - "*"
-
-  - package-ecosystem: "npm"
-    directory: "/website"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "America/Los_Angeles"
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: "deps"
-      include: "scope"
-    groups:
-      website-vite-major:
-        dependency-type: "development"
+          - 'effect'
+          - '@effect/*'
+          - 'typescript'
+      development-tools:
+        dependency-type: 'development'
         update-types:
-          - "major"
+          - 'minor'
+          - 'patch'
         patterns:
-          - "vite"
-          - "@sveltejs/vite-plugin-svelte"
-      website-dev-minor-patch:
-        dependency-type: "development"
-        update-types:
-          - "minor"
-          - "patch"
-        patterns:
-          - "*"
+          - '*'
