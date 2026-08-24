@@ -1,5 +1,5 @@
 import { BunRuntime, BunServices } from '@effect/platform-bun';
-import { Cause, Effect, Layer } from 'effect';
+import { Cause, Console as EffectConsole, Effect, Layer, Schema } from 'effect';
 import { CliError, Command } from 'effect/unstable/cli';
 
 import pkg from '../../package.json' with { type: 'json' };
@@ -14,7 +14,8 @@ import {
   unresolveCommand,
 } from '../commands/write';
 import { GhClient } from '../github/client';
-import { color, failPayload } from './output';
+import { sanitizeTerminalLine, tone } from '../lib/tty';
+import { type StructuredOutputMode, writeStructuredFailure } from './output';
 import { skillCommand } from './skill';
 
 const app = Command.make('prdr', {}, () => Effect.void).pipe(
@@ -35,17 +36,50 @@ const app = Command.make('prdr', {}, () => Effect.void).pipe(
   ]),
 );
 
-const program = Command.run(app, { version: pkg.version });
+const requestedStructuredMode = (): StructuredOutputMode | null => {
+  if (process.argv.includes('--agent')) {
+    return 'agent';
+  }
+  return process.argv.includes('--json') ? 'json' : null;
+};
+
+const structuredMode = requestedStructuredMode();
+const actionFlagWasRequested = process.argv
+  .slice(2)
+  .some(
+    (argument) =>
+      argument === '--help' ||
+      argument === '-h' ||
+      argument === '--version' ||
+      argument === '-v' ||
+      argument === '--wizard' ||
+      argument === '--completions' ||
+      argument.startsWith('--completions='),
+  );
+const ownsCliErrorRendering = structuredMode !== null && !actionFlagWasRequested;
+const discardCliOutput = (): undefined => undefined;
+const silentConsole = {
+  ...globalThis.console,
+  error: discardCliOutput,
+  log: discardCliOutput,
+} satisfies EffectConsole.Console;
+const commandProgram = Command.run(app, {
+  renderErrors: !ownsCliErrorRendering,
+  version: pkg.version,
+});
+const program = ownsCliErrorRendering
+  ? commandProgram.pipe(Effect.provideService(EffectConsole.Console, silentConsole))
+  : commandProgram;
 const runtimeLayer = Layer.mergeAll(BunServices.layer, GhClient.layer);
 
-const showHelpHasErrors = (cause: Cause.Cause<unknown>): boolean | undefined => {
+const showHelpFromCause = (cause: Cause.Cause<unknown>): CliError.ShowHelp | undefined => {
   for (const reason of cause.reasons) {
     if (
       Cause.isFailReason(reason) &&
       CliError.isCliError(reason.error) &&
-      reason.error instanceof CliError.ShowHelp
+      Schema.is(CliError.ShowHelp)(reason.error)
     ) {
-      return reason.error.errors.length > 0;
+      return reason.error;
     }
   }
   return undefined;
@@ -73,26 +107,27 @@ const taggedErrorCode = (error: unknown): string | null => {
 };
 
 const errorMessage = (error: unknown): string => {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'detail' in error &&
-    typeof error.detail === 'string'
-  ) {
-    return error.detail;
+  if (error instanceof Error && error.message.trim() !== '') {
+    return error.message;
   }
-  return error instanceof Error ? error.message : (taggedErrorCode(error) ?? String(error));
+  return taggedErrorCode(error) ?? String(error);
+};
+
+const commandName = (): string => {
+  const [first = 'prdr', second] = process.argv.slice(2);
+  if (first === 'greptile' || first === 'aikido') {
+    return second === undefined || second.startsWith('-') ? first : `${first}.${second}`;
+  }
+  return first;
 };
 
 const writeBoundaryError = (error: unknown): void => {
   const message = errorMessage(error);
   const code = taggedErrorCode(error) ?? 'error';
-  if (process.argv.includes('--agent')) {
-    console.log(JSON.stringify({ ...failPayload(message, code), error }));
-  } else if (process.argv.includes('--json')) {
-    console.log(JSON.stringify({ ...failPayload(message, code), error }, null, 2));
+  if (structuredMode === null) {
+    console.error(tone.danger(sanitizeTerminalLine(message)));
   } else {
-    console.error(color.red(message));
+    writeStructuredFailure(structuredMode, commandName(), message, code, { value: error });
   }
   process.exitCode = 1;
 };
@@ -101,14 +136,27 @@ const handled = program.pipe(
   Effect.provide(runtimeLayer),
   Effect.catchCause((cause) =>
     Effect.sync(() => {
-      const helpHasErrors = showHelpHasErrors(cause);
-      if (helpHasErrors !== undefined) {
-        if (helpHasErrors) {
+      const help = showHelpFromCause(cause);
+      if (help !== undefined) {
+        if (help.errors.length > 0) {
           process.exitCode = 1;
+          if (structuredMode !== null) {
+            const errors = help.errors.map((error) => ({
+              code: taggedErrorCode(error) ?? 'CliError',
+              message: errorMessage(error),
+            }));
+            writeStructuredFailure(
+              structuredMode,
+              commandName(),
+              errors.map(({ message }) => message).join('; '),
+              'CliUsageError',
+              { value: { commandPath: Array.from(help.commandPath), errors } },
+            );
+          }
         }
         return;
       }
-      writeBoundaryError(boundaryErrorFromCause(cause));
+      cause.pipe(boundaryErrorFromCause, writeBoundaryError);
     }),
   ),
 );

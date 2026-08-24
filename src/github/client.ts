@@ -20,8 +20,9 @@ interface ProcessResult {
   readonly stdout: string;
 }
 
-const execute = async (request: GhRequest): Promise<ProcessResult> => {
+const execute = async (request: GhRequest, signal: AbortSignal): Promise<ProcessResult> => {
   const subprocess = Bun.spawn(['gh', ...request.arguments], {
+    signal,
     stderr: 'pipe',
     stdin: request.input === null ? 'ignore' : 'pipe',
     stdout: 'pipe',
@@ -45,16 +46,16 @@ const execute = async (request: GhRequest): Promise<ProcessResult> => {
 const makeRun = Effect.fn('GhClient.run')(function* makeRun(request: GhRequest) {
   const result = yield* Effect.tryPromise({
     catch: (cause) =>
-      new GhCommandError({
+      GhCommandError.make({
         arguments: Array.from(request.arguments),
         exitCode: null,
         stderr: cause instanceof Error ? cause.message : String(cause),
         stdout: '',
       }),
-    try: () => execute(request),
+    try: (signal) => execute(request, signal),
   });
   if (!request.acceptedExitCodes.includes(result.exitCode)) {
-    return yield* new GhCommandError({
+    return yield* GhCommandError.make({
       arguments: Array.from(request.arguments),
       exitCode: result.exitCode,
       stderr: result.stderr,
@@ -65,7 +66,7 @@ const makeRun = Effect.fn('GhClient.run')(function* makeRun(request: GhRequest) 
 });
 
 export class GhClient extends Context.Service<GhClient, { readonly run: typeof makeRun }>()(
-  'GhClient',
+  '@seanmozeik/prdr/github/client/GhClient',
 ) {
   static readonly layer = Layer.succeed(GhClient, { run: makeRun });
 }
@@ -76,13 +77,25 @@ export const ghRequest = (
   acceptedExitCodes: readonly number[] = [0],
 ): GhRequest => ({ acceptedExitCodes, arguments: arguments_, input });
 
+export const restApiHeaders = (host: string): readonly string[] => [
+  '-H',
+  'Accept: application/vnd.github.raw+json',
+  '-H',
+  `X-GitHub-Api-Version: ${host === 'github.com' ? '2026-03-10' : '2022-11-28'}`,
+];
+
 export const decodeGhJson = <T, E, RD>(
   schema: Schema.ConstraintCodec<T, E, RD>,
   result: GhResult,
   arguments_: readonly string[],
 ): Effect.Effect<T, GhDecodeError, RD> =>
   Schema.decodeEffect(Schema.fromJsonString(schema))(result.stdout).pipe(
-    Effect.mapError((cause) => new GhDecodeError({ arguments: Array.from(arguments_), cause })),
+    Effect.mapError((cause) =>
+      GhDecodeError.make({
+        arguments: Array.from(arguments_),
+        causeMessage: cause instanceof Error ? cause.message : String(cause),
+      }),
+    ),
   );
 
 export const encodeGhJson = <T, E, RE>(
@@ -91,5 +104,10 @@ export const encodeGhJson = <T, E, RE>(
   arguments_: readonly string[],
 ): Effect.Effect<string, GhEncodeError, RE> =>
   Schema.encodeEffect(Schema.fromJsonString(schema))(value).pipe(
-    Effect.mapError((cause) => new GhEncodeError({ arguments: Array.from(arguments_), cause })),
+    Effect.mapError((cause) =>
+      GhEncodeError.make({
+        arguments: Array.from(arguments_),
+        causeMessage: cause instanceof Error ? cause.message : String(cause),
+      }),
+    ),
   );

@@ -7,7 +7,7 @@ export const skillCommand = Command.make('skill').pipe(
   Command.withDescription('Print the bundled prdr agent skill'),
   Command.withHandler(() =>
     Effect.sync(() => {
-      console.log(skillMarkdown);
+      process.stdout.write(skillMarkdown.endsWith('\n') ? skillMarkdown : `${skillMarkdown}\n`);
     }),
   ),
 );

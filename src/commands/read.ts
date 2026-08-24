@@ -3,8 +3,8 @@ import { Argument, Command, Flag } from 'effect/unstable/cli';
 
 import { outputMode, targetOptions } from '../cli/flags';
 import { printComment, printList, printSnapshot } from '../cli/presentation';
-import { emit, loadContext, toMode } from '../cli/shared';
-import { listReviewItems } from '../domain/listing';
+import { emit, loadContext, loadConversationContext, toMode } from '../cli/shared';
+import { DEFAULT_PAGE_SIZE, paginateReviewItems, prepareListPage } from '../domain/pagination';
 import { selectComment } from '../domain/selection';
 
 const providerFlag = Flag.choice('provider', [
@@ -22,6 +22,14 @@ const authorFlag = Flag.string('author').pipe(
   Flag.withDefault(''),
   Flag.withDescription('Filter by exact GitHub login'),
 );
+const cursorFlag = Flag.string('cursor').pipe(
+  Flag.withDefault(''),
+  Flag.withDescription('Continue a list from an opaque nextCursor value'),
+);
+const limitFlag = Flag.integer('limit').pipe(
+  Flag.withDefault(DEFAULT_PAGE_SIZE),
+  Flag.withDescription('Maximum records per page (1-100)'),
+);
 const referenceArgument = Argument.string('reference').pipe(
   Argument.withDescription('A qualified KIND:ID reference from prdr list'),
 );
@@ -34,7 +42,7 @@ export const inspectCommand = Command.make(
       const { snapshot } = yield* loadContext({ pr, repo });
       const mode = toMode(agent, json);
       yield* Effect.sync(() => {
-        emit(mode, snapshot, () => {
+        emit(mode, 'inspect', snapshot, () => {
           printSnapshot(snapshot);
         });
       });
@@ -43,32 +51,46 @@ export const inspectCommand = Command.make(
 
 export const listCommand = Command.make(
   'list',
-  { ...outputMode, ...targetOptions, author: authorFlag, provider: providerFlag, state: stateFlag },
-  ({ agent, author, json, pr, provider, repo, state }) =>
+  {
+    ...outputMode,
+    ...targetOptions,
+    author: authorFlag,
+    cursor: cursorFlag,
+    limit: limitFlag,
+    provider: providerFlag,
+    state: stateFlag,
+  },
+  ({ agent, author, cursor, json, limit, pr, provider, repo, state }) =>
     Effect.gen(function* listCommandGen() {
-      const { snapshot } = yield* loadContext({ pr, repo });
-      const items = listReviewItems(snapshot, { author, provider, state });
+      const pageOptions = yield* prepareListPage({ cursor, limit });
+      const { snapshot } = yield* loadConversationContext({ pr, repo });
+      const filters = { author, provider, state } as const;
+      const page = yield* paginateReviewItems(snapshot, filters, pageOptions);
       const mode = toMode(agent, json);
       yield* Effect.sync(() => {
-        emit(mode, items, () => {
-          printList(items);
+        emit(mode, 'list', page, () => {
+          printList(page);
         });
       });
     }),
-).pipe(Command.withDescription('List review findings with stable qualified references'));
+).pipe(Command.withDescription('List a cursor-paged set of findings with qualified references'));
 
 export const showCommand = Command.make(
   'show',
   { ...outputMode, ...targetOptions, reference: referenceArgument },
   ({ agent, json, pr, reference, repo }) =>
     Effect.gen(function* showCommandGen() {
-      const { snapshot } = yield* loadContext({ pr, repo });
+      const { snapshot } = yield* loadConversationContext({ pr, repo });
       const selection = yield* selectComment(snapshot, reference);
       const mode = toMode(agent, json);
       yield* Effect.sync(() => {
-        emit(mode, selection, () => {
+        emit(mode, 'show', selection, () => {
           printComment(selection);
         });
       });
     }),
-).pipe(Command.withDescription('Show one comment and its exact raw Markdown body'));
+).pipe(
+  Command.withDescription(
+    'Show a safe rendered comment; use --agent or --json for the exact raw Markdown body',
+  ),
+);

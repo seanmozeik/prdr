@@ -8,9 +8,10 @@ export const RestActor = Schema.Struct({
   type: Schema.optionalKey(Schema.String),
 });
 export type RestActor = typeof RestActor.Type;
+const NullableRestActor = Schema.NullOr(RestActor);
 
 export const PullRequestView = Schema.Struct({
-  author: Schema.Struct({ is_bot: Schema.Boolean, login: Schema.String }),
+  author: Schema.NullOr(Schema.Struct({ is_bot: Schema.Boolean, login: Schema.String })),
   baseRefName: Schema.String,
   headRefName: Schema.String,
   headRefOid: Schema.String,
@@ -20,6 +21,7 @@ export const PullRequestView = Schema.Struct({
   reviewDecision: Schema.String,
   state: Schema.String,
   title: Schema.String,
+  updatedAt: Schema.String,
   url: Schema.String,
 });
 export type PullRequestView = typeof PullRequestView.Type;
@@ -45,7 +47,7 @@ export const RawReviewComment = Schema.Struct({
   start_side: Schema.optionalKey(NullableString),
   subject_type: Schema.optionalKey(Schema.String),
   updated_at: Schema.String,
-  user: RestActor,
+  user: NullableRestActor,
 });
 export type RawReviewComment = typeof RawReviewComment.Type;
 
@@ -56,7 +58,7 @@ export const RawIssueComment = Schema.Struct({
   id: Schema.Int,
   node_id: Schema.String,
   updated_at: Schema.String,
-  user: RestActor,
+  user: NullableRestActor,
 });
 export type RawIssueComment = typeof RawIssueComment.Type;
 
@@ -68,7 +70,7 @@ export const RawReview = Schema.Struct({
   node_id: Schema.String,
   state: Schema.String,
   submitted_at: NullableString,
-  user: RestActor,
+  user: NullableRestActor,
 });
 export type RawReview = typeof RawReview.Type;
 
@@ -84,10 +86,35 @@ export const GhCheck = Schema.Struct({
 });
 export type GhCheck = typeof GhCheck.Type;
 
+const CheckRunRollup = Schema.Struct({
+  __typename: Schema.Literal('CheckRun'),
+  completedAt: NullableString,
+  conclusion: Schema.String,
+  detailsUrl: NullableString,
+  name: Schema.String,
+  startedAt: NullableString,
+  status: Schema.String,
+  workflowName: Schema.String,
+});
+
+const StatusContextRollup = Schema.Struct({
+  __typename: Schema.Literal('StatusContext'),
+  context: Schema.String,
+  startedAt: NullableString,
+  state: Schema.String,
+  targetUrl: NullableString,
+});
+
+export const CheckRollupView = Schema.Struct({
+  statusCheckRollup: Schema.Array(Schema.Union([CheckRunRollup, StatusContextRollup])),
+});
+export type CheckRollup = (typeof CheckRollupView.Type)['statusCheckRollup'][number];
+
 const GraphqlCommentIdentity = Schema.Struct({
-  databaseId: Schema.Int,
+  body: Schema.optionalKey(Schema.String),
   id: Schema.String,
-  replyTo: Schema.NullOr(Schema.Struct({ databaseId: Schema.Int, id: Schema.String })),
+  replyTo: Schema.NullOr(Schema.Struct({ id: Schema.String })),
+  updatedAt: Schema.optionalKey(Schema.String),
 });
 
 export const GraphqlThread = Schema.Struct({
@@ -109,44 +136,54 @@ export type GraphqlThread = typeof GraphqlThread.Type;
 const GraphqlPageInfo = Schema.Struct({ endCursor: NullableString, hasNextPage: Schema.Boolean });
 
 export const ReviewThreadsResponse = Schema.Struct({
-  data: Schema.NullOr(
-    Schema.Struct({
-      repository: Schema.NullOr(
-        Schema.Struct({
-          pullRequest: Schema.NullOr(
-            Schema.Struct({
-              reviewThreads: Schema.Struct({
-                nodes: Schema.Array(GraphqlThread),
-                pageInfo: GraphqlPageInfo,
+  data: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.NullOr(
+          Schema.Struct({
+            pullRequest: Schema.NullOr(
+              Schema.Struct({
+                reviewThreads: Schema.Struct({
+                  nodes: Schema.Array(GraphqlThread),
+                  pageInfo: GraphqlPageInfo,
+                }),
               }),
-            }),
-          ),
-        }),
-      ),
-    }),
+            ),
+          }),
+        ),
+      }),
+    ),
   ),
   errors: Schema.optionalKey(Schema.Array(Schema.Struct({ message: Schema.String }))),
 });
 export type ReviewThreadsResponse = typeof ReviewThreadsResponse.Type;
 
+export const ReviewThreadNodeResponse = Schema.Struct({
+  data: Schema.optionalKey(Schema.NullOr(Schema.Struct({ node: Schema.NullOr(GraphqlThread) }))),
+  errors: Schema.optionalKey(Schema.Array(Schema.Struct({ message: Schema.String }))),
+});
+export type ReviewThreadNodeResponse = typeof ReviewThreadNodeResponse.Type;
+
 export const ThreadMutationResponse = Schema.Struct({
-  data: Schema.NullOr(
-    Schema.Struct({
-      resolveReviewThread: Schema.optionalKey(
-        Schema.NullOr(
-          Schema.Struct({
-            thread: Schema.Struct({ id: Schema.String, isResolved: Schema.Boolean }),
-          }),
+  data: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        resolveReviewThread: Schema.optionalKey(
+          Schema.NullOr(
+            Schema.Struct({
+              thread: Schema.Struct({ id: Schema.String, isResolved: Schema.Boolean }),
+            }),
+          ),
         ),
-      ),
-      unresolveReviewThread: Schema.optionalKey(
-        Schema.NullOr(
-          Schema.Struct({
-            thread: Schema.Struct({ id: Schema.String, isResolved: Schema.Boolean }),
-          }),
+        unresolveReviewThread: Schema.optionalKey(
+          Schema.NullOr(
+            Schema.Struct({
+              thread: Schema.Struct({ id: Schema.String, isResolved: Schema.Boolean }),
+            }),
+          ),
         ),
-      ),
-    }),
+      }),
+    ),
   ),
   errors: Schema.optionalKey(Schema.Array(Schema.Struct({ message: Schema.String }))),
 });

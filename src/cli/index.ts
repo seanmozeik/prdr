@@ -9,15 +9,15 @@ USAGE
 
 SUBCOMMANDS
   inspect      Read a consistent pull request review snapshot
-  list         List review findings with stable qualified references
-  show         Show one comment and its exact raw Markdown body
+  list         List cursor-paged review findings with qualified references
+  show         Render one comment safely; --agent and --json keep exact raw Markdown
   comment      Create a pull request issue comment from exact Markdown input
   reply        Reply to an inline review thread from exact Markdown input
   edit         Edit an issue or inline review comment with exact Markdown input
   review       Submit a GitHub pull request review from exact Markdown input
   resolve      Resolve a review thread
   unresolve    Unresolve a review thread
-  greptile     Inspect and trigger Greptile review activity
+  greptile     Inspect, trigger, and wait for Greptile review activity
   aikido       Inspect and respond to Aikido Security review activity
   skill        Print the bundled prdr agent skill
 

@@ -1,7 +1,13 @@
 import { Effect } from 'effect';
 
-import { loadSnapshot } from '../github/snapshot';
-import { resolvePullRequest } from '../github/target';
+import {
+  loadAikidoSnapshot,
+  loadConversationSnapshot,
+  loadGreptileSnapshot,
+  loadSnapshot,
+  loadThreadSnapshot,
+} from '../github/loaders';
+import { resolvePullRequestContext } from '../github/target';
 import { type OutputMode, writeStructured } from './output';
 
 export interface TargetInput {
@@ -10,9 +16,41 @@ export interface TargetInput {
 }
 
 export const loadContext = Effect.fn('Cli.loadContext')(function* loadContext(input: TargetInput) {
-  const target = yield* resolvePullRequest(input.repo, input.pr);
-  const snapshot = yield* loadSnapshot(target);
-  return { snapshot, target };
+  const context = yield* resolvePullRequestContext(input.repo, input.pr);
+  const snapshot = yield* loadSnapshot(context);
+  return { snapshot, target: context.target };
+});
+
+export const loadConversationContext = Effect.fn('Cli.loadConversationContext')(
+  function* loadConversationContext(input: TargetInput) {
+    const context = yield* resolvePullRequestContext(input.repo, input.pr);
+    const snapshot = yield* loadConversationSnapshot(context);
+    return { snapshot, target: context.target };
+  },
+);
+
+export const loadThreadContext = Effect.fn('Cli.loadThreadContext')(function* loadThreadContext(
+  input: TargetInput,
+) {
+  const context = yield* resolvePullRequestContext(input.repo, input.pr);
+  const snapshot = yield* loadThreadSnapshot(context);
+  return { snapshot, target: context.target };
+});
+
+export const loadGreptileContext = Effect.fn('Cli.loadGreptileContext')(
+  function* loadGreptileContext(input: TargetInput) {
+    const context = yield* resolvePullRequestContext(input.repo, input.pr);
+    const snapshot = yield* loadGreptileSnapshot(context);
+    return { snapshot, target: context.target };
+  },
+);
+
+export const loadAikidoContext = Effect.fn('Cli.loadAikidoContext')(function* loadAikidoContext(
+  input: TargetInput,
+) {
+  const context = yield* resolvePullRequestContext(input.repo, input.pr);
+  const snapshot = yield* loadAikidoSnapshot(context);
+  return { snapshot, target: context.target };
 });
 
 export const toMode = (agent: boolean, json: boolean): OutputMode => {
@@ -22,19 +60,10 @@ export const toMode = (agent: boolean, json: boolean): OutputMode => {
   return json ? 'json' : 'human';
 };
 
-export const emit = (mode: OutputMode, value: unknown, human: () => void): void => {
+export const emit = (mode: OutputMode, command: string, value: object, human: () => void): void => {
   if (mode === 'human') {
     human();
   } else {
-    writeStructured(mode, value);
+    writeStructured(mode, command, value);
   }
-};
-
-export const emitWithAgent = (
-  mode: OutputMode,
-  value: unknown,
-  agentValue: unknown,
-  human: () => void,
-): void => {
-  emit(mode, mode === 'agent' ? agentValue : value, human);
 };

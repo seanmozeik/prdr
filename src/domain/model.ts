@@ -1,4 +1,11 @@
-import type { GhCheck, PullRequestView, RawIssueComment, RawReview, RawReviewComment } from './raw';
+import type {
+  GhCheck,
+  PullRequestView,
+  RawIssueComment,
+  RawReview,
+  RawReviewComment,
+  RestActor,
+} from './raw';
 
 export type Provider = 'aikido' | 'greptile' | 'human' | 'other-bot';
 export type FindingSeverity = 'critical' | 'high' | 'info' | 'low' | 'medium' | 'unknown';
@@ -15,26 +22,34 @@ export interface PullRequestTarget extends RepositoryTarget {
   readonly number: number;
 }
 
+export interface PullRequestContext {
+  readonly pullRequest: PullRequestView;
+  readonly target: PullRequestTarget;
+}
+
 export interface FindingMetadata {
   readonly provider: Provider;
   readonly severity: FindingSeverity;
   readonly title: string | null;
 }
 
-export interface ReviewComment extends RawReviewComment {
+export type ReviewComment = Omit<RawReviewComment, 'user'> & {
   readonly metadata: FindingMetadata;
   readonly ref: string;
-}
+  readonly user: RestActor;
+};
 
-export interface IssueComment extends RawIssueComment {
+export type IssueComment = Omit<RawIssueComment, 'user'> & {
   readonly metadata: FindingMetadata;
   readonly ref: string;
-}
+  readonly user: RestActor;
+};
 
-export interface ReviewSubmission extends RawReview {
+export type ReviewSubmission = Omit<RawReview, 'user'> & {
   readonly metadata: FindingMetadata;
   readonly ref: string;
-}
+  readonly user: RestActor;
+};
 
 export interface ReviewThread {
   readonly comments: readonly ReviewComment[];
@@ -53,32 +68,81 @@ export interface ReviewThread {
   readonly viewerCanUnresolve: boolean;
 }
 
-export interface PullRequestSnapshot {
-  readonly checks: readonly GhCheck[];
-  readonly issueComments: readonly IssueComment[];
-  readonly pullRequest: PullRequestView;
-  readonly reviews: readonly ReviewSubmission[];
-  readonly schemaVersion: 1;
-  readonly target: PullRequestTarget;
+export interface ThreadSnapshot extends PullRequestContext {
   readonly threads: readonly ReviewThread[];
   readonly unthreadedReviewComments: readonly ReviewComment[];
 }
 
-export interface CommentSelection {
-  readonly comment: IssueComment | ReviewComment | ReviewSubmission;
-  readonly kind: CommentKind;
-  readonly thread: ReviewThread | null;
+export interface ConversationSnapshot extends ThreadSnapshot {
+  readonly issueComments: readonly IssueComment[];
+  readonly reviews: readonly ReviewSubmission[];
+}
+
+export interface GreptileSnapshot extends ThreadSnapshot {
+  readonly issueComments: readonly IssueComment[];
+}
+
+export interface AikidoSnapshot extends ThreadSnapshot {
+  readonly checks: readonly GhCheck[];
+}
+
+export interface PullRequestSnapshot extends ConversationSnapshot {
+  readonly checks: readonly GhCheck[];
+  readonly schemaVersion: 1;
+}
+
+export type CommentSelection =
+  | { readonly comment: IssueComment; readonly kind: 'issue-comment'; readonly thread: null }
+  | {
+      readonly comment: ReviewComment;
+      readonly kind: 'review-comment';
+      readonly thread: ReviewThread | null;
+    }
+  | { readonly comment: ReviewSubmission; readonly kind: 'review'; readonly thread: null };
+
+export interface ProviderActivity {
+  readonly author: string;
+  readonly createdAt: string;
+  readonly ref: string;
+  readonly title: string | null;
+  readonly updatedAt: string;
+  readonly url: string;
+}
+
+export interface ReviewThreadSummary {
+  readonly author: string;
+  readonly isOutdated: boolean;
+  readonly line: number | null;
+  readonly path: string;
+  readonly replyCount: number;
+  readonly rootRef: string;
+  readonly severity: FindingSeverity;
+  readonly threadRef: string;
+  readonly title: string | null;
+  readonly url: string;
+  readonly viewerCanReply: boolean;
+  readonly viewerCanResolve: boolean;
 }
 
 export interface GreptileStatus {
   readonly confidence: number | null;
+  readonly currentHead: string;
   readonly lastReviewedCommit: string | null;
-  readonly latestSummary: IssueComment | null;
-  readonly openThreads: readonly ReviewThread[];
+  readonly latestActivity: ProviderActivity | null;
+  readonly latestCompletedReview: ProviderActivity | null;
+  readonly openThreads: readonly ReviewThreadSummary[];
   readonly reviewCount: number | null;
+}
+
+export interface GreptileWaitResult {
+  readonly attempts: number;
+  readonly elapsedMilliseconds: number;
+  readonly head: string;
+  readonly status: GreptileStatus;
 }
 
 export interface AikidoStatus {
   readonly checks: readonly GhCheck[];
-  readonly openThreads: readonly ReviewThread[];
+  readonly currentHead: string;
+  readonly openThreads: readonly ReviewThreadSummary[];
 }

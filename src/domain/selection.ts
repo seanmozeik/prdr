@@ -1,77 +1,71 @@
 import { Effect } from 'effect';
 
-import { CommentNotFoundError, CommentReferenceError, ThreadNotFoundError } from './errors';
-import type { CommentSelection, PullRequestSnapshot, ReviewComment, ReviewThread } from './model';
+import { CommentNotFoundError, ThreadNotFoundError } from './errors';
+import type {
+  CommentSelection,
+  ConversationSnapshot,
+  ReviewComment,
+  ReviewThread,
+  ThreadSnapshot,
+} from './model';
 import { parseCommentReference, parseThreadReference } from './references';
 
-const reviewComments = (snapshot: PullRequestSnapshot): readonly ReviewComment[] => [
+const reviewComments = (snapshot: ThreadSnapshot): readonly ReviewComment[] => [
   ...snapshot.threads.flatMap((thread) => thread.comments),
   ...snapshot.unthreadedReviewComments,
 ];
 
-const threadForComment = (snapshot: PullRequestSnapshot, commentId: number): ReviewThread | null =>
+const threadForComment = (snapshot: ThreadSnapshot, commentId: number): ReviewThread | null =>
   snapshot.threads.find((thread) => thread.comments.some((comment) => comment.id === commentId)) ??
   null;
 
 export const selectComment = Effect.fn('Selection.comment')(function* selectComment(
-  snapshot: PullRequestSnapshot,
+  snapshot: ConversationSnapshot,
   reference: string,
 ) {
   const parsed = yield* parseCommentReference(reference);
-  const matches: CommentSelection[] = [];
-  if (parsed.kind === 'unqualified' || parsed.kind === 'review-comment') {
+  if (parsed.kind === 'review-comment') {
     const comment = reviewComments(snapshot).find((candidate) => candidate.id === parsed.id);
     if (comment !== undefined) {
-      matches.push({
+      return {
         comment,
         kind: 'review-comment',
         thread: threadForComment(snapshot, comment.id),
-      });
+      } satisfies CommentSelection;
     }
-  }
-  if (parsed.kind === 'unqualified' || parsed.kind === 'issue-comment') {
+  } else if (parsed.kind === 'issue-comment') {
     const comment = snapshot.issueComments.find((candidate) => candidate.id === parsed.id);
     if (comment !== undefined) {
-      matches.push({ comment, kind: 'issue-comment', thread: null });
+      return { comment, kind: 'issue-comment', thread: null } satisfies CommentSelection;
     }
-  }
-  if (parsed.kind === 'unqualified' || parsed.kind === 'review') {
+  } else {
     const comment = snapshot.reviews.find((candidate) => candidate.id === parsed.id);
     if (comment !== undefined) {
-      matches.push({ comment, kind: 'review', thread: null });
+      return { comment, kind: 'review', thread: null } satisfies CommentSelection;
     }
   }
-  if (matches.length === 0) {
-    return yield* new CommentNotFoundError({ reference });
-  }
-  if (matches.length > 1) {
-    return yield* new CommentReferenceError({
-      detail: 'The numeric ID matches more than one object. Use a qualified KIND:ID reference.',
-      reference,
-    });
-  }
-  const [match] = matches;
-  if (match === undefined) {
-    return yield* new CommentNotFoundError({ reference });
-  }
-  return match;
+  return yield* CommentNotFoundError.make({ reference });
 });
 
 export const selectThread = Effect.fn('Selection.thread')(function* selectThread(
-  snapshot: PullRequestSnapshot,
+  snapshot: ThreadSnapshot,
   reference: string,
 ) {
   if (reference.startsWith('thread:')) {
     const id = yield* parseThreadReference(reference);
     const thread = snapshot.threads.find((candidate) => candidate.id === id);
     if (thread === undefined) {
-      return yield* new ThreadNotFoundError({ reference });
+      return yield* ThreadNotFoundError.make({ reference });
     }
     return thread;
   }
-  const selection = yield* selectComment(snapshot, reference);
-  if (selection.thread === null) {
-    return yield* new ThreadNotFoundError({ reference });
+  const parsed = yield* parseCommentReference(reference);
+  if (parsed.kind !== 'review-comment') {
+    return yield* ThreadNotFoundError.make({ reference });
   }
-  return selection.thread;
+  const thread = threadForComment(snapshot, parsed.id);
+  if (thread === null) {
+    return yield* ThreadNotFoundError.make({ reference });
+  }
+  return thread;
 });

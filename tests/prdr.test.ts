@@ -14,6 +14,7 @@ import type {
   GraphqlThread,
   PullRequestView,
   RawIssueComment,
+  RawReview,
   RawReviewComment,
 } from '../src/domain/raw';
 import { selectComment, selectThread } from '../src/domain/selection';
@@ -40,6 +41,7 @@ const pullRequest: PullRequestView = {
   reviewDecision: '',
   state: 'OPEN',
   title: 'Test pull request',
+  updatedAt: '2026-08-24T10:00:00Z',
   url: 'https://github.com/seanmozeik/prdr/pull/42',
 };
 
@@ -83,16 +85,8 @@ const graphqlThread = (
 ): GraphqlThread => ({
   comments: {
     nodes: [
-      { databaseId: rootId, id: `PRRC_${rootId}`, replyTo: null },
-      ...(replyId === null
-        ? []
-        : [
-            {
-              databaseId: replyId,
-              id: `PRRC_${replyId}`,
-              replyTo: { databaseId: rootId, id: `PRRC_${rootId}` },
-            },
-          ]),
+      { id: `PRRC_${rootId}`, replyTo: null },
+      ...(replyId === null ? [] : [{ id: `PRRC_${replyId}`, replyTo: { id: `PRRC_${rootId}` } }]),
     ],
     totalCount: replyId === null ? 1 : 2,
   },
@@ -115,7 +109,9 @@ const makeSnapshot = (): Promise<PullRequestSnapshot> => {
   const root = reviewComment(1, 'greptile-apps[bot]', greptileBody);
   const reply = reviewComment(2, 'reviewer', 'Verified on the current head.\n', 1);
   const summary = issueComment(
-    '<!-- greptile-status -->\nConfidence Score: 4/5\nReviews (3): Last reviewed commit: ' +
+    '<!-- greptile-status -->\nConfidence Score: 4/5\n' +
+      '[Unrelated commit](https://github.com/seanmozeik/prdr/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n' +
+      'Reviews (3): Last reviewed commit: ' +
       '[head](https://github.com/seanmozeik/prdr/commit/0123456789abcdef0123456789abcdef01234567)',
   );
   return Effect.runPromise(
@@ -159,6 +155,15 @@ describe('provider parsing', () => {
       ),
     ).toEqual({ provider: 'aikido', severity: 'high', title: 'Potential file inclusion attack' });
   });
+
+  it('bounds extracted titles without changing the raw body', () => {
+    const body = `<img alt="P1"> **${'x'.repeat(200)}**\n\nExact body`;
+    const metadata = findingMetadata('greptile-apps[bot]', body);
+
+    expect(metadata.title?.endsWith('...')).toBe(true);
+    expect(metadata.title).toHaveLength(160);
+    expect(body).toEndWith('Exact body');
+  });
 });
 
 describe('Markdown-safe provider commands', () => {
@@ -167,10 +172,25 @@ describe('Markdown-safe provider commands', () => {
     expect(withGreptileMention(body)).toBe(body);
   });
 
+  it('adds a Greptile mention as a separate paragraph', () => {
+    const body = '# Inspect this\n\n```ts\nconst value = 1;\n```\n';
+
+    expect(withGreptileMention(body)).toBe(`@greptileai\n\n${body}`);
+  });
+
   it('builds the documented Aikido ignore reply', async () => {
     expect(await Effect.runPromise(aikidoIgnoreBody('frontend-only false positive\n'))).toBe(
       '@AikidoSec ignore: frontend-only false positive',
     );
+  });
+
+  it('rejects Unicode line separators in an Aikido ignore reason', async () => {
+    const error = await Effect.runPromise(
+      Effect.flip(aikidoIgnoreBody('first line\u0085second line')),
+    );
+
+    expect(error._tag).toBe('MarkdownInputError');
+    expect(error.message).toContain('one line');
   });
 });
 
@@ -188,14 +208,103 @@ describe('snapshot composition', () => {
     expect(threadSelection.root.id).toBe(1);
   });
 
+  it('requires qualified references at the selection boundary', async () => {
+    const snapshot = await makeSnapshot();
+    const error = await Effect.runPromise(Effect.flip(selectComment(snapshot, '2')));
+
+    expect(error._tag).toBe('CommentReferenceError');
+    expect(error.message).toContain('review-comment:ID');
+  });
+
   it('extracts current provider status', async () => {
     const snapshot = await makeSnapshot();
     const greptile = greptileStatus(snapshot);
     expect(greptile.confidence).toBe(4);
+    expect(greptile.currentHead).toBe(pullRequest.headRefOid);
     expect(greptile.reviewCount).toBe(3);
     expect(greptile.lastReviewedCommit).toBe(pullRequest.headRefOid);
+    expect(greptile.latestActivity?.ref).toBe('issue-comment:9');
+    expect(greptile.latestCompletedReview?.ref).toBe('issue-comment:9');
     expect(greptile.openThreads).toHaveLength(1);
-    expect(aikidoStatus(snapshot).checks[0]?.state).toBe('SUCCESS');
+    expect(Object.hasOwn(greptile.latestActivity ?? {}, 'body')).toBe(false);
+    expect(Object.hasOwn(greptile.openThreads[0] ?? {}, 'comments')).toBe(false);
+    expect(greptile.openThreads[0]?.rootRef).toBe('review-comment:1');
+    expect(aikidoStatus(snapshot)).toMatchObject({
+      checks: [{ state: 'SUCCESS' }],
+      currentHead: pullRequest.headRefOid,
+    });
+  });
+
+  it('keeps the latest completed Greptile review when later activity reports a failure', async () => {
+    const snapshot = await makeSnapshot();
+    const [summary] = snapshot.issueComments;
+    if (summary === undefined) {
+      throw new Error('The snapshot did not contain the Greptile summary.');
+    }
+    const blocked = {
+      ...summary,
+      body: 'Too many files changed. Greptile could not complete this review.',
+      id: 10,
+      node_id: 'IC_10',
+      ref: 'issue-comment:10',
+      updated_at: '2026-08-24T10:10:00Z',
+    };
+    const status = greptileStatus({ ...snapshot, issueComments: [summary, blocked] });
+
+    expect(status.latestActivity?.ref).toBe('issue-comment:10');
+    expect(status.latestCompletedReview?.ref).toBe('issue-comment:9');
+    expect(status.confidence).toBe(4);
+    expect(status.lastReviewedCommit).toBe(pullRequest.headRefOid);
+  });
+
+  it('rejects Greptile numbers outside their safe ranges', async () => {
+    const snapshot = await makeSnapshot();
+    const [summary] = snapshot.issueComments;
+    if (summary === undefined) {
+      throw new Error('The snapshot did not contain the Greptile summary.');
+    }
+    const status = greptileStatus({
+      ...snapshot,
+      issueComments: [
+        {
+          ...summary,
+          body: (summary.body ?? '')
+            .replace('4/5', '5.5/5')
+            .replace('Reviews (3)', 'Reviews (999999999999999999999)'),
+        },
+      ],
+    });
+
+    expect(status.confidence).toBeNull();
+    expect(status.reviewCount).toBeNull();
+  });
+
+  it('normalizes deleted actors at the snapshot boundary', async () => {
+    const deletedComment = { ...reviewComment(3, 'unused', 'Deleted author'), user: null };
+    const deletedIssue = { ...issueComment('Deleted issue author'), user: null };
+    const deletedReview: RawReview = {
+      body: 'Deleted review author',
+      commit_id: pullRequest.headRefOid,
+      html_url: 'https://github.com/seanmozeik/prdr/pull/42#pullrequestreview-11',
+      id: 11,
+      node_id: 'PRR_11',
+      state: 'COMMENTED',
+      submitted_at: '2026-08-24T10:05:00Z',
+      user: null,
+    };
+    const snapshot = await Effect.runPromise(
+      composeSnapshot(target, pullRequest, {
+        checks: [],
+        graphqlThreads: [graphqlThread(3, null, false)],
+        issueComments: [deletedIssue],
+        reviewComments: [deletedComment],
+        reviews: [deletedReview],
+      }),
+    );
+
+    expect(snapshot.threads[0]?.root.user).toEqual({ login: '[deleted]', type: 'Deleted' });
+    expect(snapshot.issueComments[0]?.user).toEqual({ login: '[deleted]', type: 'Deleted' });
+    expect(snapshot.reviews[0]?.user).toEqual({ login: '[deleted]', type: 'Deleted' });
   });
 });
 

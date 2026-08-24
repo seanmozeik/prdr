@@ -7,11 +7,13 @@
  * Fast iteration (JS only, no tarball / formula):
  *   bun run build -- --no-formula
  */
-import { chmodSync, cpSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import pkg from '../package.json' with { type: 'json' };
+import { createDeterministicTarGzip, type ArchiveEntry } from './archive';
+import { updateFormula } from './formula';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const skipTarballAndFormula = process.argv.includes('--no-formula');
@@ -20,14 +22,7 @@ const distPrefix = './dist/';
 const distDir = path.join(root, 'dist');
 const entry = './src/cli/index.ts';
 
-const binField = pkg.bin;
-if (typeof binField !== 'object' || binField === null || Array.isArray(binField)) {
-  throw new TypeError('package.json "bin" must be a map of command names to paths');
-}
-const binPath = binField['prdr'];
-if (typeof binPath !== 'string') {
-  throw new TypeError('package.json must define bin.prdr as a string');
-}
+const binPath = pkg.bin.prdr;
 if (!binPath.startsWith(distPrefix)) {
   throw new TypeError(`package.json bin.prdr must start with "${distPrefix}", got "${binPath}"`);
 }
@@ -41,7 +36,7 @@ const cli = Bun.spawnSync(
   { cwd: root, stderr: 'inherit', stdout: 'inherit' },
 );
 if (cli.exitCode !== 0) {
-  process.exit(cli.exitCode ?? 1);
+  process.exit(cli.exitCode);
 }
 
 const outPath = path.join(distDir, CLI_BUNDLE_NAME);
@@ -51,46 +46,42 @@ if (skipTarballAndFormula) {
   process.exit(0);
 }
 
-/** Homebrew installs this archive under libexec. */
 const archiveInner = `prdr-${version}`;
-const stageRoot = path.join(root, 'artifacts', '.stage');
-const stageInner = path.join(stageRoot, archiveInner);
-
-rmSync(stageRoot, { force: true, recursive: true });
-mkdirSync(path.join(stageInner, 'dist'), { recursive: true });
-cpSync(outPath, path.join(stageInner, 'dist', CLI_BUNDLE_NAME));
-cpSync(path.join(root, 'src'), path.join(stageInner, 'src'), { recursive: true });
-cpSync(path.join(root, 'skills'), path.join(stageInner, 'skills'), { recursive: true });
-cpSync(path.join(root, 'package.json'), path.join(stageInner, 'package.json'));
-
 mkdirSync(path.join(root, 'artifacts'), { recursive: true });
 const tarName = `prdr-${version}.tar.gz`;
 const tarPath = path.join(root, 'artifacts', tarName);
 
-const tar = Bun.spawnSync(['tar', '-czf', tarPath, '-C', stageRoot, archiveInner], {
-  cwd: root,
-  stderr: 'inherit',
-  stdout: 'inherit',
-});
-if (tar.exitCode !== 0) {
-  process.exit(tar.exitCode ?? 1);
+const archiveEntries: ArchiveEntry[] = [
+  {
+    data: await Bun.file(outPath).bytes(),
+    mode: 0o755,
+    path: `${archiveInner}/dist/${CLI_BUNDLE_NAME}`,
+  },
+  {
+    data: await Bun.file(path.join(root, 'package.json')).bytes(),
+    mode: 0o644,
+    path: `${archiveInner}/package.json`,
+  },
+];
+const skillRoot = path.join(root, 'skills');
+const skillFiles = new Bun.Glob('**/*');
+for await (const relativePath of skillFiles.scan({ cwd: skillRoot, onlyFiles: true })) {
+  archiveEntries.push({
+    data: await Bun.file(path.join(skillRoot, relativePath)).bytes(),
+    mode: 0o644,
+    path: `${archiveInner}/skills/${relativePath.replaceAll('\\', '/')}`,
+  });
 }
-
-rmSync(stageRoot, { force: true, recursive: true });
+await Bun.write(tarPath, createDeterministicTarGzip(archiveEntries));
 
 const sha256 = new Bun.CryptoHasher('sha256')
   .update(await Bun.file(tarPath).arrayBuffer())
   .digest('hex');
 
 const formulaPath = path.join(root, 'Formula', 'prdr.rb');
-let rb = await Bun.file(formulaPath).text();
-rb = rb.replace(/^(?<prefix>\s*version\s+")[^"]+(?<suffix>")/mu, `$<prefix>${version}$<suffix>`);
-rb = rb.replace(
-  /^(?<prefix>\s*sha256\s+")[0-9a-fA-F]+(?<suffix>")/mu,
-  `$<prefix>${sha256}$<suffix>`,
-);
-await Bun.write(formulaPath, rb);
+const formula = updateFormula(await Bun.file(formulaPath).text(), version, sha256);
+await Bun.write(formulaPath, formula);
 
-console.log(`Wrote ${tarPath}`);
-console.log(`sha256 ${sha256}`);
-console.log(`Updated Formula/prdr.rb to version ${version}`);
+process.stdout.write(
+  `Wrote ${tarPath}\nsha256 ${sha256}\nUpdated Formula/prdr.rb to version ${version}\n`,
+);

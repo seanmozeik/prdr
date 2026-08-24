@@ -1,11 +1,17 @@
 import type {
+  AikidoSnapshot,
   AikidoStatus,
   FindingMetadata,
   FindingSeverity,
+  GreptileSnapshot,
   GreptileStatus,
+  IssueComment,
   Provider,
-  PullRequestSnapshot,
+  ProviderActivity,
+  ReviewThread,
+  ReviewThreadSummary,
 } from './model';
+import { compareText, textPreview } from './text';
 
 const greptileLogins = new Set(['greptile-apps[bot]', 'greptileai[bot]', 'greptile[bot]']);
 const aikidoLogins = new Set(['aikido-pr-checks[bot]', 'aikidosec[bot]']);
@@ -13,9 +19,9 @@ const aikidoLogins = new Set(['aikido-pr-checks[bot]', 'aikidosec[bot]']);
 const titlePattern = /\*\*(?<title>[^*\n]+)\*\*/u;
 const greptileSeverityPattern = /alt=["']P(?<priority>[0-2])["']/iu;
 const aikidoSeverityPattern = /\b(?<severity>critical|high|medium|low) severity\b/iu;
-const confidencePattern = /Confidence Score:\s*(?<score>[0-5](?:\.\d+)?)\/5/iu;
-const reviewCountPattern = /Reviews \((?<count>[0-9]+)\)/u;
-const commitPattern = /github\.com\/[^/]+\/[^/]+\/commit\/(?<sha>[0-9a-f]{7,40})/iu;
+const confidencePattern = /Confidence Score:\s*(?<score>[0-9]+(?:\.\d+)?)\/5/iu;
+const reviewMetadataPattern =
+  /Reviews \((?<count>[0-9]+)\):\s*Last reviewed commit:[^\r\n]{0,500}?github\.com\/[^/\s)]+\/[^/\s)]+\/commit\/(?<sha>[0-9a-f]{7,64})/iu;
 
 export const providerFor = (login: string, actorType?: string): Provider => {
   const normalized = login.toLowerCase();
@@ -62,7 +68,8 @@ export const findingMetadata = (
 ): FindingMetadata => {
   const provider = providerFor(login, actorType);
   const text = body ?? '';
-  const title = titlePattern.exec(text)?.groups?.['title']?.trim() ?? null;
+  const extractedTitle = titlePattern.exec(text)?.groups?.['title']?.trim();
+  const title = extractedTitle === undefined ? null : textPreview(extractedTitle);
   let severity: FindingSeverity = 'unknown';
   if (provider === 'greptile') {
     severity = greptileSeverity(text);
@@ -72,29 +79,80 @@ export const findingMetadata = (
   return { provider, severity, title };
 };
 
-const nullableNumber = (value: string | undefined): number | null =>
-  value === undefined ? null : Number(value);
+const confidenceValue = (value: string | undefined): number | null => {
+  if (value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 5 ? parsed : null;
+};
 
-export const greptileStatus = (snapshot: PullRequestSnapshot): GreptileStatus => {
-  const summaries = snapshot.issueComments
+const countValue = (value: string | undefined): number | null => {
+  if (value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const providerActivity = (comment: IssueComment | null): ProviderActivity | null =>
+  comment === null
+    ? null
+    : {
+        author: comment.user.login,
+        createdAt: comment.created_at,
+        ref: comment.ref,
+        title: comment.metadata.title,
+        updatedAt: comment.updated_at,
+        url: comment.html_url,
+      };
+
+const threadSummary = (thread: ReviewThread): ReviewThreadSummary => ({
+  author: thread.root.user.login,
+  isOutdated: thread.isOutdated,
+  line: thread.line ?? thread.originalLine,
+  path: thread.path,
+  replyCount: Math.max(0, thread.comments.length - 1),
+  rootRef: thread.root.ref,
+  severity: thread.root.metadata.severity,
+  threadRef: thread.ref,
+  title: thread.root.metadata.title,
+  url: thread.root.html_url,
+  viewerCanReply: thread.viewerCanReply,
+  viewerCanResolve: thread.viewerCanResolve,
+});
+
+const isCompletedGreptileReview = (comment: GreptileSnapshot['issueComments'][number]): boolean => {
+  const body = comment.body ?? '';
+  return confidencePattern.test(body) || reviewMetadataPattern.test(body);
+};
+
+export const greptileStatus = (snapshot: GreptileSnapshot): GreptileStatus => {
+  const activity = snapshot.issueComments
     .filter((comment) => comment.metadata.provider === 'greptile')
-    .toSorted((left, right) => right.updated_at.localeCompare(left.updated_at));
-  const latestSummary = summaries[0] ?? null;
-  const body = latestSummary?.body ?? '';
+    .toSorted((left, right) => compareText(right.updated_at, left.updated_at));
+  const latestActivity = activity[0] ?? null;
+  const latestCompletedReview =
+    activity.find((comment) => isCompletedGreptileReview(comment)) ?? null;
+  const body = latestCompletedReview?.body ?? '';
+  const reviewMetadata = reviewMetadataPattern.exec(body);
   return {
-    confidence: nullableNumber(confidencePattern.exec(body)?.groups?.['score']),
-    lastReviewedCommit: commitPattern.exec(body)?.groups?.['sha'] ?? null,
-    latestSummary,
-    openThreads: snapshot.threads.filter(
-      (thread) => !thread.isResolved && thread.root.metadata.provider === 'greptile',
-    ),
-    reviewCount: nullableNumber(reviewCountPattern.exec(body)?.groups?.['count']),
+    confidence: confidenceValue(confidencePattern.exec(body)?.groups?.['score']),
+    currentHead: snapshot.pullRequest.headRefOid,
+    lastReviewedCommit: reviewMetadata?.groups?.['sha'] ?? null,
+    latestActivity: providerActivity(latestActivity),
+    latestCompletedReview: providerActivity(latestCompletedReview),
+    openThreads: snapshot.threads
+      .filter((thread) => !thread.isResolved && thread.root.metadata.provider === 'greptile')
+      .map((thread) => threadSummary(thread)),
+    reviewCount: countValue(reviewMetadata?.groups?.['count']),
   };
 };
 
-export const aikidoStatus = (snapshot: PullRequestSnapshot): AikidoStatus => ({
+export const aikidoStatus = (snapshot: AikidoSnapshot): AikidoStatus => ({
   checks: snapshot.checks.filter((check) => check.name.toLowerCase().includes('aikido')),
-  openThreads: snapshot.threads.filter(
-    (thread) => !thread.isResolved && thread.root.metadata.provider === 'aikido',
-  ),
+  currentHead: snapshot.pullRequest.headRefOid,
+  openThreads: snapshot.threads
+    .filter((thread) => !thread.isResolved && thread.root.metadata.provider === 'aikido')
+    .map((thread) => threadSummary(thread)),
 });

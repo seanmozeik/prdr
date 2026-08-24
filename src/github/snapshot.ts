@@ -1,203 +1,134 @@
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 
 import type {
+  AikidoSnapshot,
+  ConversationSnapshot,
+  GreptileSnapshot,
   IssueComment,
+  PullRequestContext,
   PullRequestSnapshot,
   PullRequestTarget,
   ReviewComment,
   ReviewSubmission,
   ReviewThread,
+  ThreadSnapshot,
 } from '../domain/model';
 import { findingMetadata } from '../domain/providers';
-import {
+import type {
   GhCheck,
-  type GraphqlThread,
+  GraphqlThread,
+  PullRequestView,
   RawIssueComment,
   RawReview,
   RawReviewComment,
-  ReviewThreadsResponse,
+  RestActor,
 } from '../domain/raw';
 import { issueCommentRef, reviewCommentRef, reviewRef, threadRef } from '../domain/references';
-import { decodeGhJson, GhClient, ghRequest } from './client';
-import { GhGraphqlError, PullRequestChangedError, SnapshotInvariantError } from './errors';
-import { reviewThreadsQuery } from './queries';
-import { reloadPullRequest, repositorySelector } from './target';
+import { SnapshotInvariantError } from './errors';
 
-const rawHeaders = [
-  '-H',
-  'Accept: application/vnd.github.raw+json',
-  '-H',
-  'X-GitHub-Api-Version: 2022-11-28',
-];
+const deletedActor: RestActor = { login: '[deleted]', type: 'Deleted' };
+const normalizeActor = (actor: RestActor | null): RestActor => actor ?? deletedActor;
 
-const restArguments = (target: PullRequestTarget, endpoint: string): readonly string[] => [
-  'api',
-  '--hostname',
-  target.host,
-  '--paginate',
-  '--slurp',
-  ...rawHeaders,
-  endpoint,
-];
+const decorateReviewComment = (comment: RawReviewComment): ReviewComment => {
+  const user = normalizeActor(comment.user);
+  return {
+    ...comment,
+    metadata: findingMetadata(user.login, comment.body, user.type),
+    ref: reviewCommentRef(comment.id),
+    user,
+  };
+};
 
-const loadRestPages = <T, E>(
-  target: PullRequestTarget,
-  endpoint: string,
-  schema: Schema.ConstraintCodec<T, E>,
-) =>
-  Effect.gen(function* loadRestPagesGen() {
-    const gh = yield* GhClient;
-    const arguments_ = restArguments(target, endpoint);
-    const result = yield* gh.run(ghRequest(arguments_));
-    const pages = yield* decodeGhJson(Schema.Array(Schema.Array(schema)), result, arguments_);
-    return pages.flat();
-  });
+const decorateIssueComment = (comment: RawIssueComment): IssueComment => {
+  const user = normalizeActor(comment.user);
+  return {
+    ...comment,
+    metadata: findingMetadata(user.login, comment.body, user.type),
+    ref: issueCommentRef(comment.id),
+    user,
+  };
+};
 
-const graphqlErrors = (response: ReviewThreadsResponse): readonly string[] =>
-  response.errors?.map(({ message }) => message) ?? [];
+const decorateReview = (review: RawReview): ReviewSubmission => {
+  const user = normalizeActor(review.user);
+  return {
+    ...review,
+    metadata: findingMetadata(user.login, review.body, user.type),
+    ref: reviewRef(review.id),
+    user,
+  };
+};
 
-const loadReviewThreadPage = Effect.fn('Snapshot.loadReviewThreadPage')(
-  function* loadReviewThreadPage(target: PullRequestTarget, cursor: string | null) {
-    const gh = yield* GhClient;
-    const arguments_ = [
-      'api',
-      'graphql',
-      '--hostname',
-      target.host,
-      '-f',
-      `query=${reviewThreadsQuery}`,
-      '-F',
-      `owner=${target.owner}`,
-      '-F',
-      `name=${target.name}`,
-      '-F',
-      `number=${target.number}`,
-    ];
-    if (cursor !== null) {
-      arguments_.push('-F', `cursor=${cursor}`);
-    }
-    const result = yield* gh.run(ghRequest(arguments_));
-    const response = yield* decodeGhJson(ReviewThreadsResponse, result, arguments_);
-    const errors = graphqlErrors(response);
-    if (errors.length > 0) {
-      return yield* new GhGraphqlError({ messages: Array.from(errors) });
-    }
-    const connection = response.data?.repository?.pullRequest?.reviewThreads;
-    if (connection === undefined) {
-      return yield* new SnapshotInvariantError({
-        detail: 'GitHub did not return the requested pull request review thread connection.',
-      });
-    }
-    return connection;
-  },
-);
-
-const loadReviewThreads = Effect.fn('Snapshot.loadReviewThreads')(function* loadReviewThreads(
-  target: PullRequestTarget,
-) {
-  const threads: GraphqlThread[] = [];
-  let cursor: string | null = null;
-  let hasNextPage = true;
-  while (hasNextPage) {
-    const connection: {
-      readonly nodes: readonly GraphqlThread[];
-      readonly pageInfo: { readonly endCursor: string | null; readonly hasNextPage: boolean };
-    } = yield* loadReviewThreadPage(target, cursor);
-    const { nodes, pageInfo } = connection;
-    const { endCursor, hasNextPage: nextPage } = pageInfo;
-    threads.push(...nodes);
-    hasNextPage = nextPage;
-    cursor = endCursor;
-    if (hasNextPage && cursor === null) {
-      return yield* new SnapshotInvariantError({
-        detail: 'GitHub marked the review thread page as incomplete but did not return a cursor.',
-      });
-    }
-  }
-  return threads;
-});
-
-const loadChecks = Effect.fn('Snapshot.loadChecks')(function* loadChecks(
-  target: PullRequestTarget,
-) {
-  const gh = yield* GhClient;
-  const arguments_ = [
-    'pr',
-    'checks',
-    String(target.number),
-    '--repo',
-    repositorySelector(target),
-    '--json',
-    'bucket,completedAt,event,link,name,startedAt,state,workflow',
-  ];
-  const result = yield* gh.run(ghRequest(arguments_, null, [0, 1, 8]));
-  if (result.stdout.trim().length === 0) {
-    return [];
-  }
-  return yield* decodeGhJson(Schema.Array(GhCheck), result, arguments_);
-});
-
-const decorateReviewComment = (comment: RawReviewComment): ReviewComment => ({
-  ...comment,
-  metadata: findingMetadata(comment.user.login, comment.body, comment.user.type),
-  ref: reviewCommentRef(comment.id),
-});
-
-const decorateIssueComment = (comment: RawIssueComment): IssueComment => ({
-  ...comment,
-  metadata: findingMetadata(comment.user.login, comment.body, comment.user.type),
-  ref: issueCommentRef(comment.id),
-});
-
-const decorateReview = (review: RawReview): ReviewSubmission => ({
-  ...review,
-  metadata: findingMetadata(review.user.login, review.body, review.user.type),
-  ref: reviewRef(review.id),
-});
-
-export interface SnapshotParts {
-  readonly checks: PullRequestSnapshot['checks'];
+export interface ReviewThreadParts {
   readonly graphqlThreads: readonly GraphqlThread[];
-  readonly issueComments: readonly RawIssueComment[];
   readonly reviewComments: readonly RawReviewComment[];
-  readonly reviews: readonly RawReview[];
 }
 
-export const composeSnapshot = Effect.fn('Snapshot.compose')(function* composeSnapshot(
-  target: PullRequestTarget,
-  pullRequest: PullRequestSnapshot['pullRequest'],
-  parts: SnapshotParts,
+interface ComposedThreads {
+  readonly threads: readonly ReviewThread[];
+  readonly unthreadedReviewComments: readonly ReviewComment[];
+}
+
+const composeThreads = Effect.fn('Snapshot.composeThreads')(function* composeThreads(
+  parts: ReviewThreadParts,
 ) {
-  const { checks, graphqlThreads, issueComments, reviewComments, reviews } = parts;
-  const comments = reviewComments.map((comment) => decorateReviewComment(comment));
-  const commentById = new Map(comments.map((comment) => [comment.id, comment]));
+  const comments = parts.reviewComments.map(decorateReviewComment);
+  const commentByNodeId = new Map(comments.map((comment) => [comment.node_id, comment]));
+  const nodeIdByDatabaseId = new Map(comments.map((comment) => [comment.id, comment.node_id]));
+  if (commentByNodeId.size !== comments.length || nodeIdByDatabaseId.size !== comments.length) {
+    return yield* SnapshotInvariantError.make({
+      detail: 'REST returned duplicate review comment identities.',
+    });
+  }
   const threadedIds = new Set<number>();
   const threads: ReviewThread[] = [];
 
-  for (const graphqlThread of graphqlThreads) {
+  for (const graphqlThread of parts.graphqlThreads) {
     if (graphqlThread.comments.nodes.length !== graphqlThread.comments.totalCount) {
-      return yield* new SnapshotInvariantError({
+      return yield* SnapshotInvariantError.make({
         detail: `Review thread ${graphqlThread.id} has more than 100 comments and cannot be read safely.`,
       });
     }
-    const rootIdentity = graphqlThread.comments.nodes.find((comment) => comment.replyTo === null);
-    if (rootIdentity === undefined) {
-      return yield* new SnapshotInvariantError({
-        detail: `Review thread ${graphqlThread.id} has no root comment.`,
+    const rootIdentities = graphqlThread.comments.nodes.filter(
+      (comment) => comment.replyTo === null,
+    );
+    const [rootIdentity] = rootIdentities;
+    if (rootIdentity === undefined || rootIdentities.length !== 1) {
+      return yield* SnapshotInvariantError.make({
+        detail: `Review thread ${graphqlThread.id} must have exactly one root comment.`,
       });
     }
-    const root = commentById.get(rootIdentity.databaseId);
+    const root = commentByNodeId.get(rootIdentity.id);
     if (root === undefined) {
-      return yield* new SnapshotInvariantError({
-        detail: `REST did not return root review comment ${rootIdentity.databaseId}.`,
+      return yield* SnapshotInvariantError.make({
+        detail: `REST did not return root review comment ${rootIdentity.id}.`,
       });
     }
     const threadComments: ReviewComment[] = [];
     for (const identity of graphqlThread.comments.nodes) {
-      const comment = commentById.get(identity.databaseId);
+      const comment = commentByNodeId.get(identity.id);
       if (comment === undefined) {
-        return yield* new SnapshotInvariantError({
-          detail: `REST did not return review comment ${identity.databaseId}.`,
+        return yield* SnapshotInvariantError.make({
+          detail: `REST did not return review comment ${identity.id}.`,
+        });
+      }
+      if (threadedIds.has(comment.id)) {
+        return yield* SnapshotInvariantError.make({
+          detail: `Review comment ${identity.id} belongs to more than one review thread.`,
+        });
+      }
+      const restReplyTo =
+        comment.in_reply_to_id === undefined || comment.in_reply_to_id === null
+          ? null
+          : nodeIdByDatabaseId.get(comment.in_reply_to_id);
+      if (restReplyTo === undefined) {
+        return yield* SnapshotInvariantError.make({
+          detail: `REST did not return parent review comment ${comment.in_reply_to_id}.`,
+        });
+      }
+      if ((identity.replyTo?.id ?? null) !== restReplyTo) {
+        return yield* SnapshotInvariantError.make({
+          detail: `REST and GraphQL disagree about the parent of review comment ${identity.id}.`,
         });
       }
       threadedIds.add(comment.id);
@@ -222,56 +153,68 @@ export const composeSnapshot = Effect.fn('Snapshot.compose')(function* composeSn
   }
 
   return {
-    checks,
-    issueComments: issueComments.map((comment) => decorateIssueComment(comment)),
-    pullRequest,
-    reviews: reviews.map((review) => decorateReview(review)),
-    schemaVersion: 1,
-    target,
     threads,
     unthreadedReviewComments: comments.filter((comment) => !threadedIds.has(comment.id)),
-  } satisfies PullRequestSnapshot;
+  } satisfies ComposedThreads;
 });
 
-export const loadSnapshot = Effect.fn('Snapshot.load')(function* loadSnapshot(
+export const composeThreadSnapshot = Effect.fn('Snapshot.composeThread')(
+  function* composeThreadSnapshot(context: PullRequestContext, parts: ReviewThreadParts) {
+    const threadData = yield* composeThreads(parts);
+    return { ...context, ...threadData } satisfies ThreadSnapshot;
+  },
+);
+
+export interface ConversationParts extends ReviewThreadParts {
+  readonly issueComments: readonly RawIssueComment[];
+  readonly reviews: readonly RawReview[];
+}
+
+export const composeConversationSnapshot = Effect.fn('Snapshot.composeConversation')(
+  function* composeConversationSnapshot(context: PullRequestContext, parts: ConversationParts) {
+    const threadData = yield* composeThreads(parts);
+    return {
+      ...context,
+      ...threadData,
+      issueComments: parts.issueComments.map(decorateIssueComment),
+      reviews: parts.reviews.map(decorateReview),
+    } satisfies ConversationSnapshot;
+  },
+);
+
+export const composeGreptileSnapshot = Effect.fn('Snapshot.composeGreptile')(
+  function* composeGreptileSnapshot(
+    context: PullRequestContext,
+    parts: ReviewThreadParts & { readonly issueComments: readonly RawIssueComment[] },
+  ) {
+    const threadData = yield* composeThreads(parts);
+    return {
+      ...context,
+      ...threadData,
+      issueComments: parts.issueComments.map(decorateIssueComment),
+    } satisfies GreptileSnapshot;
+  },
+);
+
+export const composeAikidoSnapshot = Effect.fn('Snapshot.composeAikido')(
+  function* composeAikidoSnapshot(
+    context: PullRequestContext,
+    parts: ReviewThreadParts & { readonly checks: readonly GhCheck[] },
+  ) {
+    const threadData = yield* composeThreads(parts);
+    return { ...context, ...threadData, checks: parts.checks } satisfies AikidoSnapshot;
+  },
+);
+
+export interface SnapshotParts extends ConversationParts {
+  readonly checks: readonly GhCheck[];
+}
+
+export const composeSnapshot = Effect.fn('Snapshot.compose')(function* composeSnapshot(
   target: PullRequestTarget,
+  pullRequest: PullRequestView,
+  parts: SnapshotParts,
 ) {
-  const before = yield* reloadPullRequest(target);
-  const base = `repos/${target.owner}/${target.name}`;
-  const loaded = yield* Effect.all(
-    {
-      checks: loadChecks(target),
-      issueComments: loadRestPages(
-        target,
-        `${base}/issues/${target.number}/comments?per_page=100`,
-        RawIssueComment,
-      ),
-      reviewComments: loadRestPages(
-        target,
-        `${base}/pulls/${target.number}/comments?per_page=100`,
-        RawReviewComment,
-      ),
-      reviews: loadRestPages(
-        target,
-        `${base}/pulls/${target.number}/reviews?per_page=100`,
-        RawReview,
-      ),
-      threads: loadReviewThreads(target),
-    },
-    { concurrency: 'unbounded' },
-  );
-  const after = yield* reloadPullRequest(target);
-  if (before.headRefOid !== after.headRefOid) {
-    return yield* new PullRequestChangedError({
-      after: after.headRefOid,
-      before: before.headRefOid,
-    });
-  }
-  return yield* composeSnapshot(target, after, {
-    checks: loaded.checks,
-    graphqlThreads: loaded.threads,
-    issueComments: loaded.issueComments,
-    reviewComments: loaded.reviewComments,
-    reviews: loaded.reviews,
-  });
+  const conversation = yield* composeConversationSnapshot({ pullRequest, target }, parts);
+  return { ...conversation, checks: parts.checks, schemaVersion: 1 } satisfies PullRequestSnapshot;
 });

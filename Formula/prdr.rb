@@ -5,9 +5,10 @@ class Prdr < Formula
   license "MIT"
 
   url "https://github.com/seanmozeik/prdr/releases/download/v#{version}/prdr-#{version}.tar.gz"
-  sha256 "e8fb6f961baa9942f72dd9322f55f4338493c758d0c7e7032814ef0c2416f14a"
+  sha256 "c9e0aedf3c745f5ef45d132dd01707bce484f883473ddca7e2c953e945e5fb8b"
 
   depends_on "oven-sh/bun/bun"
+  depends_on "gh"
 
   on_linux do
     depends_on "libsecret"

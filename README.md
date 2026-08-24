@@ -15,12 +15,12 @@ comment writes.
   and viewer permissions from `PullRequestReviewThread`.
 - Each GitHub object has a qualified reference. Examples are `review-comment:123`,
   `issue-comment:456`, `review:789`, and `thread:PRRT_...`.
-- Raw Markdown bodies stay unchanged. `prdr` does not strip HTML comments, `<details>` blocks, code
-  fences, indentation, or blank lines.
+- Raw Markdown bodies stay unchanged in `--agent` and `--json` output. `prdr` does not strip HTML
+  comments, `<details>` blocks, code fences, indentation, or blank lines.
 - Every write takes a file or standard input, encodes a typed JSON request, and passes it to
   `gh api --input -`. A Markdown body is never placed in a shell command string.
-- A snapshot checks the pull request head before and after its parallel API reads. It fails if the
-  head changes during the read.
+- A snapshot accepts only two equal consecutive reads on one pull request head. If the first pair
+  differs, one third complete read is the bounded retry.
 - Bot detection uses known provider identities and GitHub actor type. A human login that contains
   the text `bot` is still a human.
 
@@ -34,8 +34,8 @@ and GitHub's [raw review comment API](https://docs.github.com/en/rest/pulls/comm
 - Bun 1.4.0 or later
 - Effect and `@effect/platform-bun` 4.0.0-rc.111
 - TypeScript 7.0.2 with `@effect/tsgo`
-- `@seanmozeik/de-clank` 0.1.4
-- Oxlint 1.79 and Oxfmt 0.64
+- `@seanmozeik/de-clank` 0.1.5
+- Oxlint 1.80 and Oxfmt 0.65
 
 The small CLI launcher answers root `--help` and `--version` without loading Effect. The full
 Effect runtime loads only for real commands.
@@ -72,14 +72,58 @@ repository and pull request from the current worktree.
 
 ```nu
 prdr inspect --agent
-prdr list --state open --agent
+prdr list --state open --limit 50 --agent
 prdr list --state open --provider greptile --agent
 prdr list --state open --provider aikido --agent
 prdr show review-comment:123 --agent
 ```
 
 Use `--agent` for compact one-line JSON, `--json` for formatted JSON, or no output flag for terminal
-output. `inspect --agent` returns the complete snapshot. `list` returns smaller normalized records.
+output. Both structured modes use one versioned protocol:
+
+```json
+{
+  "protocolVersion": 1,
+  "ok": true,
+  "command": "list",
+  "data": {
+    "hasMore": true,
+    "headRefOid": "0123456789abcdef0123456789abcdef01234567",
+    "items": [{ "ref": "review-comment:123", "preview": "Keep Markdown exact..." }],
+    "limit": 50,
+    "nextCursor": "OPAQUE_CURSOR",
+    "target": {
+      "host": "github.com",
+      "name": "REPOSITORY",
+      "nameWithOwner": "OWNER/REPOSITORY",
+      "number": 123,
+      "owner": "OWNER"
+    },
+    "total": 81
+  }
+}
+```
+
+Failures use the same top-level contract and put `code`, `message`, and `details` under `error`.
+Consumers must reject an unknown protocol version before they read `data`. Human `show` output is a
+safe rendered view that removes terminal control bytes. Use `--agent` or `--json` when you need the
+exact raw body. `inspect --agent` returns the complete, unpaged snapshot under `data`.
+
+`list` returns a cursor-paged object under `data`. The object identifies its target and
+`headRefOid`. It returns 50 records by default and accepts a `--limit` from 1 to 100. Each record has
+a `preview` of its first content line, up to 160 grapheme clusters. A preview ends in `...` when
+more content exists. It never replaces the exact Markdown available through `show`.
+
+Use `data.nextCursor` while `data.hasMore` is true. Keep the same PR and filters on each request:
+
+```nu
+let first = (prdr list --state open --limit 50 --agent | from json)
+prdr list --state open --limit 50 --cursor $first.data.nextCursor --agent
+```
+
+The cursor binds to the PR, head commit, filters, and normalized result set. If review activity
+changes between page requests, `prdr` returns `ListPaginationError`. Restart without `--cursor` so
+that the traversal cannot skip or repeat records.
 
 ## Markdown-safe writes
 
@@ -108,15 +152,21 @@ and [quick reference](https://www.greptile.com/docs/developer-quick-reference).
 prdr greptile status --agent
 prdr greptile trigger --agent
 prdr greptile ask --body-file /tmp/prdr-greptile-question.md --agent
+prdr greptile wait --interval-seconds 15 --timeout-seconds 600 --agent
 ```
 
-`status` reports open Greptile threads, the latest summary, confidence when present, review count,
-and last reviewed commit. `ask` keeps the supplied Markdown and adds `@greptileai` only when the
-body does not contain the mention.
+`status` reports the current head, lightweight summaries for open Greptile threads, the latest
+activity, and the latest completed review. It also reports confidence when present, review count,
+and last reviewed commit. Each summary has a qualified reference for `show`. A later failure or
+progress comment does not replace the completed review data. `ask` keeps the supplied Markdown and
+adds `@greptileai` as a separate paragraph only when the body does not contain the mention. `wait`
+polls only Greptile data, has a finite timeout, and fails if the pull request head changes.
 
 ## Aikido Security
 
-`status` combines the named Aikido check with open Aikido review threads.
+`status` reports the current head and combines the named Aikido check with lightweight summaries
+for all open Aikido review threads. Use each summary's `rootRef` with `show` to read its exact
+Markdown.
 
 ```nu
 prdr aikido status --agent
@@ -159,17 +209,50 @@ bun run lint
 bun run typecheck
 bun run test
 bun run build -- --no-formula
+bun run publish:check
 bun run verify
 ```
 
-The tests cover provider identity and severity parsing, GraphQL thread composition, qualified
-selection, Greptile and Aikido status, and exact Markdown transport through the typed `gh` client.
+The tests cover every GitHub mutation route, GraphQL pagination, consistent command-specific
+loaders, deleted GitHub actors, provider state and waits, terminal control sanitization, versioned
+subprocess output, deterministic releases, and exact Markdown transport.
 
 ## Releases
 
-`bun run build` creates `dist/prdr.js`, packages `artifacts/prdr-VERSION.tar.gz`, calculates its
-SHA-256 checksum, and updates [`Formula/prdr.rb`](Formula/prdr.rb). Use `--no-formula` for normal
-development builds.
+The npm package exposes one supported surface: the bundled `prdr` executable and the bundled skill.
+It does not publish raw TypeScript source.
+
+`bun run build` creates `dist/prdr.js`, creates a deterministic
+`artifacts/prdr-VERSION.tar.gz`, calculates its SHA-256 checksum, and updates
+[`Formula/prdr.rb`](Formula/prdr.rb). Use `--no-formula` for normal development builds.
+
+Use this release transaction. Start from a clean, current `main` branch and choose the release
+version:
+
+```nu
+let version = "0.2.0"
+git pull --ff-only
+bun pm pkg set $"version=($version)"
+bun install
+bun run verify
+bun run audit:production
+bun run build
+tar -tvzf $"artifacts/prdr-($version).tar.gz"
+bun run publish:check
+git diff --check
+git status --short
+git add package.json bun.lock Formula/prdr.rb
+git commit -m $"chore(release): v($version)"
+git push origin main
+git tag -a $"v($version)" -m $"v($version)"
+git push origin $"v($version)"
+gh release create $"v($version)" $"artifacts/prdr-($version).tar.gz" --verify-tag --generate-notes
+bun publish
+```
+
+After publication, install the npm package and the Homebrew formula in clean temporary locations.
+Run `prdr --version` and `prdr --help` from both installations. The Git tag, GitHub archive, npm
+version, formula version, and formula checksum must refer to the same deterministic build.
 
 ## License and origin
 

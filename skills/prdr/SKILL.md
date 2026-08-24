@@ -31,7 +31,7 @@ Run this in the pull request worktree:
 
 ```nu
 prdr inspect --agent
-prdr list --state open --agent
+prdr list --state open --limit 50 --agent
 ```
 
 Outside the worktree, identify the target explicitly:
@@ -48,8 +48,29 @@ Use qualified references from `prdr list`, such as `review-comment:123`, `issue-
 
 ## Read without losing Markdown
 
-`inspect --agent` returns the complete snapshot as one JSON line. `show` returns one object and its
-thread link. The `body` field is the raw GitHub Markdown body.
+Every structured result has `protocolVersion`, `ok`, `command`, and either `data` or `error`.
+`--agent` returns the envelope as one JSON line. `--json` returns the same envelope with indentation.
+Reject an unknown protocol version before parsing `data`.
+
+`inspect --agent` returns the complete snapshot under `data`. `show` returns one object and its
+thread link under `data`. `data.comment.body` is the raw GitHub Markdown body.
+
+`list` returns its target and `headRefOid` with `data.items`, `data.total`, `data.hasMore`, and
+`data.nextCursor`. It returns 50 records by default and accepts `--limit` values from 1 to 100.
+Continue until `hasMore` is false:
+
+```nu
+let first = (prdr list --state open --limit 50 --agent | from json)
+prdr list --state open --limit 50 --cursor $first.data.nextCursor --agent
+```
+
+Keep the same PR and filters for every page. The page size can change. A cursor binds to the PR,
+head commit, filters, and result set. If `ListPaginationError` says that the result changed, discard
+the partial traversal and start again without `--cursor`.
+
+Each list record has a first-line `preview` of up to 160 grapheme clusters. A trailing `...` means
+that more content exists. Use its qualified `ref` with `show` to read the exact Markdown. Do not
+treat a preview as the full finding.
 
 ```nu
 prdr show review-comment:123 --agent
@@ -111,9 +132,12 @@ Read Greptile state before you act:
 prdr greptile status --agent
 ```
 
-The result includes the latest summary, confidence score when present, last reviewed commit when
-present, and open Greptile threads. Compare the last reviewed commit with the current head before
-you trust a clean result.
+The result includes `currentHead` and separates lightweight summaries for the latest activity and
+latest completed review. It also includes the confidence score when present, last reviewed commit
+when present, and summaries for all open Greptile threads. Use each qualified activity `ref` or
+thread `rootRef` with `show` to read exact Markdown. A later failure or progress comment does not
+erase the last completed review data. Compare `lastReviewedCommit` with `currentHead` before you
+trust a clean result.
 
 With user authority, request a new review or ask a question:
 
@@ -123,8 +147,14 @@ prdr greptile ask --body-file /tmp/prdr-greptile-question.md --agent
 ```
 
 `greptile ask` adds `@greptileai` only when the body does not already contain that mention. After a
-trigger, poll `greptile status` at a sensible interval. Stop when the reviewed commit matches the
-current head and no new actionable thread exists. Stop and report if the head changes again.
+trigger, use the bounded wait command:
+
+```nu
+prdr greptile wait --interval-seconds 15 --timeout-seconds 600 --agent
+```
+
+The command stops when the reviewed commit matches the captured head. It fails on timeout or when
+the head changes. After it succeeds, read open Greptile threads and address each actionable finding.
 
 ## Aikido Security
 
@@ -133,6 +163,9 @@ Read both Aikido checks and open inline findings:
 ```nu
 prdr aikido status --agent
 ```
+
+The command returns `currentHead` and all open Aikido thread summaries. Use a summary's `rootRef`
+with `show` to read the exact finding.
 
 For a valid finding, fix and verify the code, then use the normal `reply` command if a response is
 needed. For a confirmed false positive, put a short, one-line reason in a file. With explicit user
@@ -147,10 +180,17 @@ check again. Do not claim success until Aikido confirms the ignore or the check 
 
 ## Failure handling
 
-- A `GhCommandError` contains the exact `gh` argument array, exit code, standard output, and
+- Read failures from `error.code`, `error.message`, and `error.details`.
+- A `GhCommandError` detail contains the exact `gh` argument array, exit code, standard output, and
   standard error. Do not print credentials or add a token flag.
 - A `SnapshotInvariantError` means GitHub returned a partial or unsafe graph. Do not mutate from
   that snapshot.
 - A `PullRequestChangedError` means the head changed during the read. Run the read again.
+- A `SnapshotChangedError` means review data changed across all three bounded complete reads. Run
+  the read again after activity settles.
+- A `ListPaginationError` means a page size or cursor is unsafe, or the result changed during page
+  traversal. Restart without `--cursor` when the error asks for a fresh traversal.
+- A `ProviderWaitTimeoutError` or `ProviderWaitHeadChangedError` stops a Greptile wait. Read the
+  current head and provider status before the next action.
 - A `ThreadPermissionError` means the current GitHub account cannot do the requested thread action.
 - Keep `--agent` or `--json` on commands when another agent must parse the result.

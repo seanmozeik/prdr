@@ -1,22 +1,47 @@
 import { Effect } from 'effect';
-import { Argument, Command } from 'effect/unstable/cli';
+import { Argument, Command, Flag } from 'effect/unstable/cli';
 
 import { markdownOptions, outputMode, targetOptions } from '../cli/flags';
 import { printMutation } from '../cli/presentation';
-import { emit, loadContext, toMode } from '../cli/shared';
+import {
+  emit,
+  loadAikidoContext,
+  loadGreptileContext,
+  loadThreadContext,
+  toMode,
+} from '../cli/shared';
 import { UnsupportedMutationError } from '../domain/errors';
 import { aikidoIgnoreBody, readMarkdown, withGreptileMention } from '../domain/markdown';
 import { aikidoStatus, greptileStatus } from '../domain/providers';
 import { selectThread } from '../domain/selection';
+import { waitForGreptile } from '../domain/wait';
+import { loadGreptileSnapshot } from '../github/loaders';
 import { createIssueComment, replyToThread } from '../github/mutations';
-import { resolvePullRequest } from '../github/target';
+import { resolvePullRequest, resolvePullRequestContext } from '../github/target';
+import { sanitizeTerminalLine } from '../lib/tty';
 
 const referenceArgument = Argument.string('reference').pipe(
   Argument.withDescription('An Aikido review-comment:ID or thread:ID reference'),
 );
 
-const emitValue = (agent: boolean, json: boolean, value: unknown, human: () => void): void => {
-  emit(toMode(agent, json), value, human);
+const waitIntervalFlag = Flag.integer('interval-seconds').pipe(
+  Flag.withDefault(15),
+  Flag.withDescription('Polling interval in seconds (1-300)'),
+);
+
+const waitTimeoutFlag = Flag.integer('timeout-seconds').pipe(
+  Flag.withDefault(600),
+  Flag.withDescription('Maximum wait in seconds (1-3600)'),
+);
+
+const emitValue = (
+  agent: boolean,
+  json: boolean,
+  command: string,
+  value: object,
+  human: () => void,
+): void => {
+  emit(toMode(agent, json), command, value, human);
 };
 
 const greptileStatusCommand = Command.make(
@@ -24,17 +49,22 @@ const greptileStatusCommand = Command.make(
   { ...outputMode, ...targetOptions },
   ({ agent, json, pr, repo }) =>
     Effect.gen(function* greptileStatusCommandGen() {
-      const { snapshot } = yield* loadContext({ pr, repo });
+      const { snapshot } = yield* loadGreptileContext({ pr, repo });
       const status = greptileStatus(snapshot);
       yield* Effect.sync(() => {
-        emitValue(agent, json, status, () => {
+        emitValue(agent, json, 'greptile.status', status, () => {
           console.log(`${status.openThreads.length} open Greptile thread(s)`);
-          console.log(`Confidence: ${status.confidence ?? 'unknown'}/5`);
-          console.log(`Last reviewed commit: ${status.lastReviewedCommit ?? 'unknown'}`);
+          console.log(`Current head: ${sanitizeTerminalLine(status.currentHead)}`);
+          console.log(
+            `Confidence: ${status.confidence === null ? 'unknown' : `${status.confidence}/5`}`,
+          );
+          console.log(
+            `Last reviewed commit: ${sanitizeTerminalLine(status.lastReviewedCommit ?? 'unknown')}`,
+          );
         });
       });
     }),
-).pipe(Command.withDescription('Read Greptile summary data and open review threads'));
+).pipe(Command.withDescription('Read Greptile activity, completed review data, and open threads'));
 
 const greptileTriggerCommand = Command.make(
   'trigger',
@@ -44,7 +74,7 @@ const greptileTriggerCommand = Command.make(
       const target = yield* resolvePullRequest(repo, pr);
       const created = yield* createIssueComment(target, '@greptileai review this pull request');
       yield* Effect.sync(() => {
-        emitValue(agent, json, created, () => {
+        emitValue(agent, json, 'greptile.trigger', created, () => {
           printMutation(created);
         });
       });
@@ -56,20 +86,50 @@ const greptileAskCommand = Command.make(
   { ...markdownOptions, ...outputMode, ...targetOptions },
   ({ agent, bodyFile, json, pr, repo, stdin }) =>
     Effect.gen(function* greptileAskCommandGen() {
-      const target = yield* resolvePullRequest(repo, pr);
       const body = withGreptileMention(yield* readMarkdown({ bodyFile, stdin }));
+      const target = yield* resolvePullRequest(repo, pr);
       const created = yield* createIssueComment(target, body);
       yield* Effect.sync(() => {
-        emitValue(agent, json, created, () => {
+        emitValue(agent, json, 'greptile.ask', created, () => {
           printMutation(created);
         });
       });
     }),
 ).pipe(Command.withDescription('Ask Greptile a pull request question from exact Markdown input'));
 
+const greptileWaitCommand = Command.make(
+  'wait',
+  {
+    ...outputMode,
+    ...targetOptions,
+    intervalSeconds: waitIntervalFlag,
+    timeoutSeconds: waitTimeoutFlag,
+  },
+  ({ agent, intervalSeconds, json, pr, repo, timeoutSeconds }) =>
+    Effect.gen(function* greptileWaitCommandGen() {
+      const result = yield* waitForGreptile(
+        { intervalSeconds, timeoutSeconds },
+        () => resolvePullRequestContext(repo, pr),
+        loadGreptileSnapshot,
+      );
+      yield* Effect.sync(() => {
+        emitValue(agent, json, 'greptile.wait', result, () => {
+          console.log(
+            `Greptile reviewed ${sanitizeTerminalLine(result.head)} after ${result.attempts} attempt(s).`,
+          );
+        });
+      });
+    }),
+).pipe(Command.withDescription('Wait for Greptile to complete a review of the current head'));
+
 export const greptileCommand = Command.make('greptile').pipe(
   Command.withDescription('Inspect and trigger Greptile review activity'),
-  Command.withSubcommands([greptileStatusCommand, greptileTriggerCommand, greptileAskCommand]),
+  Command.withSubcommands([
+    greptileStatusCommand,
+    greptileTriggerCommand,
+    greptileAskCommand,
+    greptileWaitCommand,
+  ]),
 );
 
 const aikidoStatusCommand = Command.make(
@@ -77,13 +137,14 @@ const aikidoStatusCommand = Command.make(
   { ...outputMode, ...targetOptions },
   ({ agent, json, pr, repo }) =>
     Effect.gen(function* aikidoStatusCommandGen() {
-      const { snapshot } = yield* loadContext({ pr, repo });
+      const { snapshot } = yield* loadAikidoContext({ pr, repo });
       const status = aikidoStatus(snapshot);
       yield* Effect.sync(() => {
-        emitValue(agent, json, status, () => {
+        emitValue(agent, json, 'aikido.status', status, () => {
           console.log(`${status.openThreads.length} open Aikido thread(s)`);
+          console.log(`Current head: ${sanitizeTerminalLine(status.currentHead)}`);
           for (const check of status.checks) {
-            console.log(`${check.state} ${check.name}`);
+            console.log(`${sanitizeTerminalLine(check.state)} ${sanitizeTerminalLine(check.name)}`);
           }
         });
       });
@@ -95,19 +156,19 @@ const aikidoIgnoreCommand = Command.make(
   { ...markdownOptions, ...outputMode, ...targetOptions, reference: referenceArgument },
   ({ agent, bodyFile, json, pr, reference, repo, stdin }) =>
     Effect.gen(function* aikidoIgnoreCommandGen() {
-      const { snapshot, target } = yield* loadContext({ pr, repo });
+      const reason = yield* readMarkdown({ bodyFile, stdin });
+      const body = yield* aikidoIgnoreBody(reason);
+      const { snapshot, target } = yield* loadThreadContext({ pr, repo });
       const thread = yield* selectThread(snapshot, reference);
       if (thread.root.metadata.provider !== 'aikido') {
-        return yield* new UnsupportedMutationError({
+        return yield* UnsupportedMutationError.make({
           detail: 'The selected thread was not created by Aikido Security.',
           reference,
         });
       }
-      const reason = yield* readMarkdown({ bodyFile, stdin });
-      const body = yield* aikidoIgnoreBody(reason);
-      const created = yield* replyToThread(target, thread, body);
+      const created = yield* replyToThread(target, thread, body, snapshot.pullRequest.headRefOid);
       return yield* Effect.sync(() => {
-        emitValue(agent, json, created, () => {
+        emitValue(agent, json, 'aikido.ignore', created, () => {
           printMutation(created);
         });
       });

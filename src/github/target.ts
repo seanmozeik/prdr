@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { PullRequestTarget, RepositoryTarget } from '../domain/model';
+import type { PullRequestContext, PullRequestTarget, RepositoryTarget } from '../domain/model';
 import { PullRequestView, RepositoryView } from '../domain/raw';
 import { decodeGhJson, GhClient, ghRequest } from './client';
 import { TargetResolutionError } from './errors';
@@ -16,6 +16,7 @@ const pullRequestFields = [
   'reviewDecision',
   'state',
   'title',
+  'updatedAt',
   'url',
 ].join(',');
 
@@ -33,7 +34,7 @@ const makeRepositoryTarget = Effect.fn('Target.makeRepositoryTarget')(
       owner.length === 0 ||
       name.length === 0
     ) {
-      return yield* new TargetResolutionError({
+      return yield* TargetResolutionError.make({
         detail: 'The repository host, owner, and name must not be empty.',
       });
     }
@@ -55,7 +56,7 @@ const parseRepository = Effect.fn('Target.parseRepository')(function* parseRepos
     const [host, owner, name] = parts;
     return yield* makeRepositoryTarget(host, owner, name);
   }
-  return yield* new TargetResolutionError({
+  return yield* TargetResolutionError.make({
     detail: 'Use OWNER/REPOSITORY or HOST/OWNER/REPOSITORY for --repo.',
   });
 });
@@ -63,7 +64,7 @@ const parseRepository = Effect.fn('Target.parseRepository')(function* parseRepos
 const hostFromUrl = Effect.fn('Target.hostFromUrl')(function* hostFromUrl(url: string) {
   const parsed = yield* Effect.try({
     catch: () =>
-      new TargetResolutionError({ detail: `GitHub returned an invalid repository URL: ${url}` }),
+      TargetResolutionError.make({ detail: `GitHub returned an invalid repository URL: ${url}` }),
     try: () => new URL(url),
   });
   return parsed.host;
@@ -105,14 +106,24 @@ export const loadPullRequestView = Effect.fn('Target.loadPullRequestView')(
   },
 );
 
-export const resolvePullRequest = Effect.fn('Target.resolvePullRequest')(
-  function* resolvePullRequest(repository: string, pullRequest: number) {
-    if (pullRequest < 0) {
-      return yield* new TargetResolutionError({ detail: '--pr must be a positive integer.' });
+export const resolvePullRequestContext = Effect.fn('Target.resolvePullRequestContext')(
+  function* resolvePullRequestContext(repository: string, pullRequest: number) {
+    if (!Number.isSafeInteger(pullRequest) || pullRequest < 0) {
+      return yield* TargetResolutionError.make({
+        detail: '--pr must be zero for inference or a positive safe integer.',
+      });
     }
     const resolvedRepository = yield* resolveRepository(repository);
     const view = yield* loadPullRequestView(resolvedRepository, pullRequest, repository.length > 0);
-    return { ...resolvedRepository, number: view.number } satisfies PullRequestTarget;
+    const target = { ...resolvedRepository, number: view.number } satisfies PullRequestTarget;
+    return { pullRequest: view, target } satisfies PullRequestContext;
+  },
+);
+
+export const resolvePullRequest = Effect.fn('Target.resolvePullRequest')(
+  function* resolvePullRequest(repository: string, pullRequest: number) {
+    const { target } = yield* resolvePullRequestContext(repository, pullRequest);
+    return target;
   },
 );
 

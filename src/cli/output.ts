@@ -1,48 +1,47 @@
-import { dim, terminalColumns, tone, wrapText } from '../lib/tty';
+import {
+  failureEnvelope,
+  type ProtocolEnvelope,
+  type ProtocolValue,
+  successEnvelope,
+} from '../domain/protocol';
 
 const JSON_INDENT = 2;
-
-const writeStructured = (mode: OutputMode, value: unknown): void => {
-  if (mode === 'agent') {
-    console.log(JSON.stringify(value));
-    return;
-  }
-  console.log(JSON.stringify(value, null, JSON_INDENT));
-};
-
-const writeOut = (text: string): void => {
-  console.log(text);
-};
-
-const writeErr = (text: string): void => {
-  console.error(text);
-};
-
-/** Backwards-compat color shim. */
-const color = {
-  cyan: (text: string): string => tone.title(text),
-  dim: (text: string): string => dim(text),
-  green: (text: string): string => tone.accent(text),
-  red: (text: string): string => tone.danger(text),
-  yellow: (text: string): string => tone.warn(text),
-};
-
-const wrapHumanText = (text: string, width = terminalColumns()): string => wrapText(text, width);
-
-const writeHumanText = (text: string): void => {
-  console.log(wrapHumanText(text));
-};
-
-const failPayload = (
-  message: string,
-  code = 'error',
-): { readonly ok: false; readonly code: string; readonly message: string } => ({
-  code,
-  message,
-  ok: false,
-});
+const unsafeJsonLineCharacterPattern = /[\u0085\u2028\u2029]|\p{Bidi_Control}/gu;
 
 type OutputMode = 'human' | 'json' | 'agent';
+type StructuredOutputMode = Exclude<OutputMode, 'human'>;
 
-export { color, failPayload, wrapHumanText, writeErr, writeHumanText, writeOut, writeStructured };
-export type { OutputMode };
+const escapeUnsafeJsonLineCharacter = (character: string): string => {
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) {
+    return character;
+  }
+  return String.raw`\u${codePoint.toString(16).padStart(4, '0')}`;
+};
+
+const serializeEnvelope = (mode: StructuredOutputMode, envelope: ProtocolEnvelope): string =>
+  JSON.stringify(envelope, null, mode === 'json' ? JSON_INDENT : undefined).replace(
+    unsafeJsonLineCharacterPattern,
+    escapeUnsafeJsonLineCharacter,
+  );
+
+const writeEnvelope = (mode: StructuredOutputMode, envelope: ProtocolEnvelope): void => {
+  process.stdout.write(`${serializeEnvelope(mode, envelope)}\n`);
+};
+
+const writeStructured = (mode: StructuredOutputMode, command: string, value: object): void => {
+  writeEnvelope(mode, successEnvelope(command, { value }));
+};
+
+const writeStructuredFailure = (
+  mode: StructuredOutputMode,
+  command: string,
+  message: string,
+  code: string,
+  details: ProtocolValue,
+): void => {
+  writeEnvelope(mode, failureEnvelope(command, message, code, details));
+};
+
+export { writeStructured, writeStructuredFailure };
+export type { OutputMode, StructuredOutputMode };

@@ -24,44 +24,38 @@
   },
   "files": [
     "dist",
-    "skills",
-    "src"
+    "skills"
   ],
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
+    "audit:production": "bun audit",
     "build": "bun scripts/build.ts",
     "check": "bun run format && bun run lint:fix && bun run typecheck && bun run test",
     "dev": "bun run src/cli/index.ts",
-    "prepublishOnly": "bun scripts/build.ts -- --no-formula",
+    "prepack": "bun scripts/build.ts -- --no-formula",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "format": "oxfmt --write .",
-    "lint": "oxlint --format agent --tsconfig tsconfig.oxlint.json ./src ./tests ./scripts",
-    "lint:fix": "oxlint --format agent --tsconfig tsconfig.oxlint.json --fix ./src ./tests ./scripts",
-    "prepare": "effect-tsgo patch",
+    "lint": "oxlint --format agent --tsconfig tsconfig.oxlint.json .",
+    "lint:fix": "oxlint --format agent --tsconfig tsconfig.oxlint.json --fix .",
+    "prepare": "bun node_modules/@effect/tsgo/dist/effect-tsgo.cjs patch",
+    "publish:check": "bun publish --dry-run",
     "format:check": "oxfmt --check .",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build -- --no-formula"
   },
-  "dependencies": {
-    "@effect/platform-bun": "4.0.0-rc.111",
-    "effect": "4.0.0-rc.111",
-    "typescript": "7.0.2"
-  },
   "devDependencies": {
+    "@effect/platform-bun": "4.0.0-rc.111",
     "@effect/tsgo": "0.36.5",
-    "@seanmozeik/de-clank": "0.1.4",
+    "@seanmozeik/de-clank": "0.1.5",
     "@types/bun": "1.4.0",
-    "oxfmt": "0.64.0",
-    "oxlint": "1.79.0",
-    "oxlint-tsgolint": "7.0.2001"
+    "effect": "4.0.0-rc.111",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "7.0.2"
   },
   "engines": {
     "bun": ">=1.4.0"

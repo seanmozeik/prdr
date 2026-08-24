@@ -19,11 +19,38 @@ query PrdrReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor:
           comments(first: 100) {
             totalCount
             nodes {
-              databaseId
               id
-              replyTo { databaseId id }
+              replyTo { id }
             }
           }
+        }
+      }
+    }
+  }
+}`;
+
+export const reviewThreadNodeQuery = `
+query PrdrReviewThread($threadId: ID!) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      id
+      isOutdated
+      isResolved
+      line
+      originalLine
+      path
+      resolvedBy { login }
+      subjectType
+      viewerCanReply
+      viewerCanResolve
+      viewerCanUnresolve
+      comments(first: 100) {
+        totalCount
+        nodes {
+          body
+          id
+          replyTo { id }
+          updatedAt
         }
       }
     }
