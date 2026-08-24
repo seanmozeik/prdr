@@ -70,3 +70,50 @@ mutation PrdrUnresolveThread($threadId: ID!) {
     thread { id isResolved }
   }
 }`;
+
+export const pullRequestsQuery = `
+query PrdrPullRequests(
+  $owner: String!
+  $name: String!
+  $first: Int!
+  $cursor: String
+  $states: [PullRequestState!]
+  $base: String
+  $head: String
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(
+      first: $first
+      after: $cursor
+      states: $states
+      baseRefName: $base
+      headRefName: $head
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      totalCount
+      pageInfo { endCursor hasNextPage }
+      nodes {
+        author { login }
+        baseRefName
+        body
+        comments { totalCount }
+        commits(last: 1) {
+          nodes { commit { statusCheckRollup { state } } }
+        }
+        createdAt
+        headRefName
+        headRefOid
+        headRepositoryOwner { login }
+        isDraft
+        mergeStateStatus
+        number
+        reviewDecision
+        reviewThreads { totalCount }
+        state
+        title
+        updatedAt
+        url
+      }
+    }
+  }
+}`;

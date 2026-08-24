@@ -10,7 +10,7 @@ export class CommentReferenceError extends Schema.TaggedError<CommentReferenceEr
   }
 }
 
-/** A requested comment does not exist in the current pull request snapshot. */
+/** A requested comment does not exist in the selected pull request snapshot. */
 export class CommentNotFoundError extends Schema.TaggedError<CommentNotFoundError>()(
   'CommentNotFoundError',
   { reference: Schema.String },
@@ -53,6 +53,16 @@ export class UnsupportedMutationError extends Schema.TaggedError<UnsupportedMuta
 /** A list cursor or page size cannot produce a safe, consistent page. */
 export class ListPaginationError extends Schema.TaggedError<ListPaginationError>()(
   'ListPaginationError',
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+/** A pull request index cursor or page size cannot produce a safe page. */
+export class PullRequestPaginationError extends Schema.TaggedError<PullRequestPaginationError>()(
+  'PullRequestPaginationError',
   { detail: Schema.String },
 ) {
   override get message(): string {

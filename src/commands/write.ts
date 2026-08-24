@@ -48,10 +48,10 @@ const toReviewEvent = (event: keyof typeof reviewEvents): ReviewEvent => reviewE
 export const commentCommand = Command.make(
   'comment',
   { ...markdownOptions, ...outputMode, ...targetOptions },
-  ({ agent, bodyFile, json, pr, repo, stdin }) =>
+  ({ agent, bodyFile, branch, json, pr, repo, stdin }) =>
     Effect.gen(function* commentCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const target = yield* resolvePullRequest(repo, pr);
+      const target = yield* resolvePullRequest(repo, pr, branch);
       const created = yield* createIssueComment(target, body);
       yield* Effect.sync(() => {
         emitMutation(agent, json, 'comment', created);
@@ -62,10 +62,10 @@ export const commentCommand = Command.make(
 export const replyCommand = Command.make(
   'reply',
   { ...markdownOptions, ...outputMode, ...targetOptions, reference: replyReferenceArgument },
-  ({ agent, bodyFile, json, pr, reference, repo, stdin }) =>
+  ({ agent, bodyFile, branch, json, pr, reference, repo, stdin }) =>
     Effect.gen(function* replyCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const { snapshot, target } = yield* loadThreadContext({ pr, repo });
+      const { snapshot, target } = yield* loadThreadContext({ branch, pr, repo });
       const thread = yield* selectThread(snapshot, reference);
       const created = yield* replyToThread(target, thread, body, snapshot.pullRequest.headRefOid);
       yield* Effect.sync(() => {
@@ -77,10 +77,10 @@ export const replyCommand = Command.make(
 export const editCommand = Command.make(
   'edit',
   { ...markdownOptions, ...outputMode, ...targetOptions, reference: editReferenceArgument },
-  ({ agent, bodyFile, json, pr, reference, repo, stdin }) =>
+  ({ agent, bodyFile, branch, json, pr, reference, repo, stdin }) =>
     Effect.gen(function* editCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const { snapshot, target } = yield* loadConversationContext({ pr, repo });
+      const { snapshot, target } = yield* loadConversationContext({ branch, pr, repo });
       const selection = yield* selectComment(snapshot, reference);
       const updated = yield* editComment(target, selection, body, snapshot.pullRequest.headRefOid);
       yield* Effect.sync(() => {
@@ -92,10 +92,10 @@ export const editCommand = Command.make(
 export const reviewCommand = Command.make(
   'review',
   { ...markdownOptions, ...outputMode, ...targetOptions, event: reviewEventFlag },
-  ({ agent, bodyFile, event, json, pr, repo, stdin }) =>
+  ({ agent, bodyFile, branch, event, json, pr, repo, stdin }) =>
     Effect.gen(function* reviewCommandGen() {
       const body = yield* readMarkdown({ bodyFile, stdin });
-      const context = yield* resolvePullRequestContext(repo, pr);
+      const context = yield* resolvePullRequestContext(repo, pr, branch);
       const githubEvent = toReviewEvent(event);
       const review = yield* submitReview(
         context.target,
@@ -113,9 +113,9 @@ const threadMutationCommand = (name: 'resolve' | 'unresolve') =>
   Command.make(
     name,
     { ...outputMode, ...targetOptions, reference: threadReferenceArgument },
-    ({ agent, json, pr, reference, repo }) =>
+    ({ agent, branch, json, pr, reference, repo }) =>
       Effect.gen(function* threadMutationCommandGen() {
-        const { snapshot, target } = yield* loadThreadContext({ pr, repo });
+        const { snapshot, target } = yield* loadThreadContext({ branch, pr, repo });
         const thread = yield* selectThread(snapshot, reference);
         const result =
           name === 'resolve'

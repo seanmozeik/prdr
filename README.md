@@ -1,8 +1,9 @@
 # prdr
 
-`prdr` is a typed command-line tool for GitHub pull request review conversations. It gives coding
-agents one consistent view of issue comments, submitted reviews, inline review comments, review
-threads, and checks. It also has direct support for Greptile and Aikido Security.
+`prdr` is a typed command-line tool for GitHub pull requests and their review conversations. It
+lists compact pull request summaries, then gives coding agents one consistent view of issue
+comments, submitted reviews, inline review comments, review threads, and checks. It also normalizes
+Greptile and Aikido Security state.
 
 The project is a full Bun and Effect rewrite of
 [`pbakaus/agent-reviews`](https://github.com/pbakaus/agent-reviews). The fork keeps the useful idea
@@ -21,6 +22,8 @@ comment writes.
   `gh api --input -`. A Markdown body is never placed in a shell command string.
 - A snapshot accepts only two equal consecutive reads on one pull request head. If the first pair
   differs, one third complete read is the bounded retry.
+- Pull request and review-item lists have opaque cursors. Agents can keep each response bounded
+  without losing the rest of the result set.
 - Bot detection uses known provider identities and GitHub actor type. A human login that contains
   the text `bot` is still a human.
 
@@ -56,6 +59,7 @@ Run from source:
 
 ```nu
 bun run dev -- --help
+bun run dev -- prs --repo OWNER/REPOSITORY --state open
 bun run dev -- list --repo OWNER/REPOSITORY --pr 123 --state open
 ```
 
@@ -67,15 +71,17 @@ bun run build -- --no-formula
 
 ## Read commands
 
-`--repo` accepts `OWNER/REPOSITORY` or `HOST/OWNER/REPOSITORY`. When possible, `prdr` infers the
-repository and pull request from the current worktree.
+Use an explicit repository and pull request when the agent already knows them. `--repo` accepts
+`OWNER/REPOSITORY` or `HOST/OWNER/REPOSITORY`. Select one pull request with `--pr NUMBER` or
+`--branch HEAD_BRANCH`; those selectors are mutually exclusive. Omit all three flags to infer the
+pull request from the current worktree.
 
 ```nu
-prdr inspect --agent
-prdr list --state open --limit 50 --agent
-prdr list --state open --provider greptile --agent
-prdr list --state open --provider aikido --agent
-prdr show review-comment:123 --agent
+prdr prs --repo OWNER/REPOSITORY --state open --limit 30 --agent
+prdr inspect --repo OWNER/REPOSITORY --pr 123 --agent
+prdr inspect --repo OWNER/REPOSITORY --branch feature/name --agent
+prdr list --repo OWNER/REPOSITORY --pr 123 --state open --limit 50 --agent
+prdr show review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
 Use `--agent` for compact one-line JSON, `--json` for formatted JSON, or no output flag for terminal
@@ -108,6 +114,13 @@ Failures use the same top-level contract and put `code`, `message`, and `details
 Consumers must reject an unknown protocol version before they read `data`. Human `show` output is a
 safe rendered view that removes terminal control bytes. Use `--agent` or `--json` when you need the
 exact raw body. `inspect --agent` returns the complete, unpaged snapshot under `data`.
+
+`prs` returns pull requests ordered by recent updates. Each compact item includes its number,
+title, first useful body line, age in days, author, head and base branches, draft and lifecycle
+state, review decision, merge state, check-rollup state, comment count, and review-thread count.
+Filter by `--state`, `--base`, or `--branch`. The default page size is 30 and the maximum is 100.
+Use `data.nextCursor` in the next call while `data.hasMore` is true. The cursor binds to the
+repository and filters.
 
 `list` returns a cursor-paged object under `data`. The object identifies its target and
 `headRefOid`. It returns 50 records by default and accepts a `--limit` from 1 to 100. Each record has
@@ -148,25 +161,30 @@ Greptile documents PR comment and reply mentions such as `@greptileai`, its conf
 re-review flow in its [developer essentials](https://www.greptile.com/docs/code-review/developer-essentials)
 and [quick reference](https://www.greptile.com/docs/developer-quick-reference).
 
+Greptile normally starts from repository automation. Read its state before you consider any manual
+action:
+
 ```nu
-prdr greptile status --agent
-prdr greptile trigger --agent
-prdr greptile ask --body-file /tmp/prdr-greptile-question.md --agent
-prdr greptile wait --interval-seconds 15 --timeout-seconds 600 --agent
+prdr greptile status --repo OWNER/REPOSITORY --pr 123 --agent
+prdr greptile wait --repo OWNER/REPOSITORY --pr 123 --interval-seconds 15 --timeout-seconds 600 --agent
 ```
 
 `status` reports the current head, lightweight summaries for open Greptile threads, the latest
 activity, and the latest completed review. It also reports confidence when present, review count,
 and last reviewed commit. Each summary has a qualified reference for `show`. A later failure or
-progress comment does not replace the completed review data. `ask` keeps the supplied Markdown and
-adds `@greptileai` as a separate paragraph only when the body does not contain the mention. `wait`
-polls only Greptile data, has a finite timeout, and fails if the pull request head changes.
+progress comment does not replace the completed review data. `wait` polls only Greptile data, has a
+finite timeout, and fails if the pull request head changes.
+
+The CLI keeps `greptile trigger` as a manual recovery command. Use it only when the user asks for a
+manual review request or authorizes recovery after the automatic integration failed. `greptile
+ask` is a separate explicit GitHub write for a user-requested question. It preserves the supplied
+Markdown and adds `@greptileai` only when the body does not contain the mention.
 
 ## Aikido Security
 
-`status` reports the current head and combines the named Aikido check with lightweight summaries
-for all open Aikido review threads. Use each summary's `rootRef` with `show` to read its exact
-Markdown.
+Repository automation normally starts Aikido Security. `status` reports the current head and
+combines the named Aikido check with lightweight summaries for all open Aikido review threads. Use
+each summary's `rootRef` with `show` to read its exact Markdown.
 
 ```nu
 prdr aikido status --agent
@@ -198,8 +216,9 @@ reply, provider, and permission workflow. Print the installed copy with:
 prdr skill
 ```
 
-The skill treats comments, review submissions, provider triggers, security ignores, and thread
-state changes as external mutations. A read request does not permit those actions.
+The skill starts from an explicit pull request target when one is known and treats automatic
+provider review as the normal path. Comments, reviews, manual provider actions, security ignores,
+and thread state changes remain external mutations. A read request does not permit them.
 
 ## Development checks
 
@@ -213,9 +232,10 @@ bun run publish:check
 bun run verify
 ```
 
-The tests cover every GitHub mutation route, GraphQL pagination, consistent command-specific
-loaders, deleted GitHub actors, provider state and waits, terminal control sanitization, versioned
-subprocess output, deterministic releases, and exact Markdown transport.
+The tests cover every GitHub mutation route, pull request and review-item pagination, explicit
+number and branch selection, consistent command-specific loaders, deleted GitHub actors, provider
+state and waits, terminal control sanitization, versioned subprocess output, deterministic
+releases, and exact Markdown transport.
 
 ## Releases
 

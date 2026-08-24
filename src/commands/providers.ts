@@ -47,9 +47,9 @@ const emitValue = (
 const greptileStatusCommand = Command.make(
   'status',
   { ...outputMode, ...targetOptions },
-  ({ agent, json, pr, repo }) =>
+  ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* greptileStatusCommandGen() {
-      const { snapshot } = yield* loadGreptileContext({ pr, repo });
+      const { snapshot } = yield* loadGreptileContext({ branch, pr, repo });
       const status = greptileStatus(snapshot);
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.status', status, () => {
@@ -69,9 +69,9 @@ const greptileStatusCommand = Command.make(
 const greptileTriggerCommand = Command.make(
   'trigger',
   { ...outputMode, ...targetOptions },
-  ({ agent, json, pr, repo }) =>
+  ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* greptileTriggerCommandGen() {
-      const target = yield* resolvePullRequest(repo, pr);
+      const target = yield* resolvePullRequest(repo, pr, branch);
       const created = yield* createIssueComment(target, '@greptileai review this pull request');
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.trigger', created, () => {
@@ -79,15 +79,15 @@ const greptileTriggerCommand = Command.make(
         });
       });
     }),
-).pipe(Command.withDescription('Ask Greptile to review the current pull request head'));
+).pipe(Command.withDescription('Manually ask Greptile to review the selected pull request head'));
 
 const greptileAskCommand = Command.make(
   'ask',
   { ...markdownOptions, ...outputMode, ...targetOptions },
-  ({ agent, bodyFile, json, pr, repo, stdin }) =>
+  ({ agent, bodyFile, branch, json, pr, repo, stdin }) =>
     Effect.gen(function* greptileAskCommandGen() {
       const body = withGreptileMention(yield* readMarkdown({ bodyFile, stdin }));
-      const target = yield* resolvePullRequest(repo, pr);
+      const target = yield* resolvePullRequest(repo, pr, branch);
       const created = yield* createIssueComment(target, body);
       yield* Effect.sync(() => {
         emitValue(agent, json, 'greptile.ask', created, () => {
@@ -105,11 +105,11 @@ const greptileWaitCommand = Command.make(
     intervalSeconds: waitIntervalFlag,
     timeoutSeconds: waitTimeoutFlag,
   },
-  ({ agent, intervalSeconds, json, pr, repo, timeoutSeconds }) =>
+  ({ agent, branch, intervalSeconds, json, pr, repo, timeoutSeconds }) =>
     Effect.gen(function* greptileWaitCommandGen() {
       const result = yield* waitForGreptile(
         { intervalSeconds, timeoutSeconds },
-        () => resolvePullRequestContext(repo, pr),
+        () => resolvePullRequestContext(repo, pr, branch),
         loadGreptileSnapshot,
       );
       yield* Effect.sync(() => {
@@ -120,10 +120,10 @@ const greptileWaitCommand = Command.make(
         });
       });
     }),
-).pipe(Command.withDescription('Wait for Greptile to complete a review of the current head'));
+).pipe(Command.withDescription('Wait for Greptile to complete a review of the selected head'));
 
 export const greptileCommand = Command.make('greptile').pipe(
-  Command.withDescription('Inspect and trigger Greptile review activity'),
+  Command.withDescription('Inspect Greptile review activity and manual recovery actions'),
   Command.withSubcommands([
     greptileStatusCommand,
     greptileTriggerCommand,
@@ -135,9 +135,9 @@ export const greptileCommand = Command.make('greptile').pipe(
 const aikidoStatusCommand = Command.make(
   'status',
   { ...outputMode, ...targetOptions },
-  ({ agent, json, pr, repo }) =>
+  ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* aikidoStatusCommandGen() {
-      const { snapshot } = yield* loadAikidoContext({ pr, repo });
+      const { snapshot } = yield* loadAikidoContext({ branch, pr, repo });
       const status = aikidoStatus(snapshot);
       yield* Effect.sync(() => {
         emitValue(agent, json, 'aikido.status', status, () => {
@@ -154,11 +154,11 @@ const aikidoStatusCommand = Command.make(
 const aikidoIgnoreCommand = Command.make(
   'ignore',
   { ...markdownOptions, ...outputMode, ...targetOptions, reference: referenceArgument },
-  ({ agent, bodyFile, json, pr, reference, repo, stdin }) =>
+  ({ agent, bodyFile, branch, json, pr, reference, repo, stdin }) =>
     Effect.gen(function* aikidoIgnoreCommandGen() {
       const reason = yield* readMarkdown({ bodyFile, stdin });
       const body = yield* aikidoIgnoreBody(reason);
-      const { snapshot, target } = yield* loadThreadContext({ pr, repo });
+      const { snapshot, target } = yield* loadThreadContext({ branch, pr, repo });
       const thread = yield* selectThread(snapshot, reference);
       if (thread.root.metadata.provider !== 'aikido') {
         return yield* UnsupportedMutationError.make({
@@ -180,6 +180,8 @@ const aikidoIgnoreCommand = Command.make(
 );
 
 export const aikidoCommand = Command.make('aikido').pipe(
-  Command.withDescription('Inspect and respond to Aikido Security review activity'),
+  Command.withDescription(
+    'Inspect Aikido Security review activity and confirmed false-positive actions',
+  ),
   Command.withSubcommands([aikidoStatusCommand, aikidoIgnoreCommand]),
 );

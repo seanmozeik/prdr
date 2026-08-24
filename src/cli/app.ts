@@ -4,6 +4,7 @@ import { CliError, Command } from 'effect/unstable/cli';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { aikidoCommand, greptileCommand } from '../commands/providers';
+import { pullRequestsCommand } from '../commands/pull-requests';
 import { inspectCommand, listCommand, showCommand } from '../commands/read';
 import {
   commentCommand,
@@ -21,6 +22,7 @@ import { skillCommand } from './skill';
 const app = Command.make('prdr', {}, () => Effect.void).pipe(
   Command.withDescription('Read and update GitHub pull request review conversations safely'),
   Command.withSubcommands([
+    pullRequestsCommand,
     inspectCommand,
     listCommand,
     showCommand,

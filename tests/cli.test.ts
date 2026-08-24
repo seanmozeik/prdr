@@ -52,6 +52,37 @@ if (args[0] === 'pr' && args[1] === 'view') {
         updatedAt: '2026-08-24T10:00:00Z',
         url: 'https://github.com/example/prdr/pull/42'
       }));
+} else if (args[0] === 'api' && args[1] === 'graphql' && args.some((argument) => argument.includes('query PrdrPullRequests'))) {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        pullRequests: {
+          nodes: [{
+            author: { login: 'reviewer' },
+            baseRefName: 'main',
+            body: '## Summary\\n\\nCompact pull request description.',
+            comments: { totalCount: 1 },
+            commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }] },
+            createdAt: '2026-08-20T10:00:00Z',
+            headRefName: 'feature',
+            headRefOid: '0123456789abcdef0123456789abcdef01234567',
+            headRepositoryOwner: { login: 'example' },
+            isDraft: false,
+            mergeStateStatus: 'CLEAN',
+            number: 42,
+            reviewDecision: 'APPROVED',
+            reviewThreads: { totalCount: 2 },
+            state: 'OPEN',
+            title: 'Test pull request',
+            updatedAt: '2026-08-24T10:00:00Z',
+            url: 'https://github.com/example/prdr/pull/42'
+          }],
+          pageInfo: { endCursor: null, hasNextPage: false },
+          totalCount: 1
+        }
+      }
+    }
+  }));
 } else if (args[0] === 'api' && args[1] === 'graphql' && input === '') {
   process.stdout.write(JSON.stringify({
     data: {
@@ -278,6 +309,36 @@ describe('CLI process contract', () => {
     expect(decodeEnvelope(aikido.stdout)).toMatchObject({ command: 'aikido.status', ok: true });
   });
 
+  it('lists compact pull request summaries through the structured protocol', async () => {
+    const fakeDirectory = makeFakeGh();
+    const result = await runCli(
+      ['prs', '--repo', 'example/prdr', '--limit', '1', '--agent'],
+      '',
+      `${fakeDirectory}${path.delimiter}${process.env['PATH'] ?? ''}`,
+    );
+
+    const envelope = decodeEnvelope(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(envelope).toMatchObject({ command: 'prs', ok: true });
+    if (!envelope.ok) {
+      throw new Error('The pull request list returned a failure envelope.');
+    }
+    expect(envelope.data).toMatchObject({
+      hasMore: false,
+      items: [
+        {
+          checkStatus: 'SUCCESS',
+          number: 42,
+          summary: 'Compact pull request description.',
+          title: 'Test pull request',
+        },
+      ],
+      nextCursor: null,
+      total: 1,
+    });
+  });
+
   it('shows bounded Greptile wait flags without invoking gh', async () => {
     const result = await runCli(['greptile', 'wait', '--help'], '', '');
 
@@ -299,6 +360,15 @@ describe('CLI process contract', () => {
       error: { code: 'ListPaginationError' },
       ok: false,
     });
+  });
+
+  it('shows explicit pull request target flags without invoking gh', async () => {
+    const help = await runCli(['inspect', '--help'], '', '');
+
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain('--branch');
+    expect(help.stdout).toContain('--pr');
+    expect(help.stdout).toContain('--repo');
   });
 
   it('cancels a stalled gh process at the Greptile deadline', async () => {

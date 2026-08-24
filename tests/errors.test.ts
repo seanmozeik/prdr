@@ -3,10 +3,12 @@ import { describe, expect, it } from 'bun:test';
 import {
   CommentNotFoundError,
   CommentReferenceError,
+  ListPaginationError,
   MarkdownInputError,
   ProviderWaitHeadChangedError,
   ProviderWaitInputError,
   ProviderWaitTimeoutError,
+  PullRequestPaginationError,
   ThreadNotFoundError,
   UnsupportedMutationError,
 } from '../src/domain/errors';
@@ -47,10 +49,12 @@ describe('CLI error messages', () => {
     const errors = [
       CommentNotFoundError.make({ reference: 'issue-comment:1' }),
       CommentReferenceError.make({ detail: 'Bad reference.', reference: '1' }),
+      ListPaginationError.make({ detail: 'Bad review cursor.' }),
       MarkdownInputError.make({ detail: 'No Markdown input was supplied.' }),
       ProviderWaitInputError.make({ detail: 'Bad wait input.' }),
       ProviderWaitHeadChangedError.make({ after: 'def', before: 'abc', provider: 'Greptile' }),
       ProviderWaitTimeoutError.make({ head: 'abc', provider: 'Greptile', timeoutSeconds: 10 }),
+      PullRequestPaginationError.make({ detail: 'Bad pull request cursor.' }),
       ThreadNotFoundError.make({ reference: 'thread:missing' }),
       UnsupportedMutationError.make({ detail: 'Unsupported.', reference: 'review:1' }),
       GhDecodeError.make({ arguments: ['api'], causeMessage: 'bad JSON' }),

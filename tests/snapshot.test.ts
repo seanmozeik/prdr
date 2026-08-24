@@ -476,7 +476,7 @@ describe('snapshot loaders', () => {
 
   it('accepts a pull request whose author was deleted', async () => {
     const deletedAuthor = pullRequest({ author: null });
-    const { result } = runWithHandler(resolvePullRequestContext('example/prdr', 42), () =>
+    const { result } = runWithHandler(resolvePullRequestContext('example/prdr', 42, ''), () =>
       jsonResult(deletedAuthor),
     );
 
@@ -486,9 +486,37 @@ describe('snapshot loaders', () => {
     expect(resolved.target.number).toBe(42);
   });
 
+  it('selects a pull request by an explicit repository and head branch', async () => {
+    const { captured, result } = runWithHandler(
+      resolvePullRequestContext('example/prdr', 0, 'feature'),
+      () => jsonResult(pullRequest()),
+    );
+
+    const resolved = await result;
+
+    expect(resolved.target.number).toBe(42);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.arguments).toContain('feature');
+    expect(captured[0]?.arguments).toContain('--repo');
+    expect(captured[0]?.arguments).toContain('example/prdr');
+  });
+
+  it('rejects simultaneous pull request and branch selectors before it calls gh', async () => {
+    const { captured, result } = runWithHandler(
+      Effect.flip(resolvePullRequestContext('example/prdr', 42, 'feature')),
+      defaultHandler,
+    );
+
+    const error = await result;
+
+    expect(error._tag).toBe('TargetResolutionError');
+    expect(error.message).toContain('exactly one');
+    expect(captured).toEqual([]);
+  });
+
   it('rejects an unsafe pull request number before it calls gh', async () => {
     const { captured, result } = runWithHandler(
-      Effect.flip(resolvePullRequestContext('example/prdr', Number.MAX_SAFE_INTEGER + 1)),
+      Effect.flip(resolvePullRequestContext('example/prdr', Number.MAX_SAFE_INTEGER + 1, '')),
       defaultHandler,
     );
 

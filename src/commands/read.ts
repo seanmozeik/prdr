@@ -37,9 +37,9 @@ const referenceArgument = Argument.string('reference').pipe(
 export const inspectCommand = Command.make(
   'inspect',
   { ...outputMode, ...targetOptions },
-  ({ agent, json, pr, repo }) =>
+  ({ agent, branch, json, pr, repo }) =>
     Effect.gen(function* inspectCommandGen() {
-      const { snapshot } = yield* loadContext({ pr, repo });
+      const { snapshot } = yield* loadContext({ branch, pr, repo });
       const mode = toMode(agent, json);
       yield* Effect.sync(() => {
         emit(mode, 'inspect', snapshot, () => {
@@ -60,10 +60,10 @@ export const listCommand = Command.make(
     provider: providerFlag,
     state: stateFlag,
   },
-  ({ agent, author, cursor, json, limit, pr, provider, repo, state }) =>
+  ({ agent, author, branch, cursor, json, limit, pr, provider, repo, state }) =>
     Effect.gen(function* listCommandGen() {
       const pageOptions = yield* prepareListPage({ cursor, limit });
-      const { snapshot } = yield* loadConversationContext({ pr, repo });
+      const { snapshot } = yield* loadConversationContext({ branch, pr, repo });
       const filters = { author, provider, state } as const;
       const page = yield* paginateReviewItems(snapshot, filters, pageOptions);
       const mode = toMode(agent, json);
@@ -78,9 +78,9 @@ export const listCommand = Command.make(
 export const showCommand = Command.make(
   'show',
   { ...outputMode, ...targetOptions, reference: referenceArgument },
-  ({ agent, json, pr, reference, repo }) =>
+  ({ agent, branch, json, pr, reference, repo }) =>
     Effect.gen(function* showCommandGen() {
-      const { snapshot } = yield* loadConversationContext({ pr, repo });
+      const { snapshot } = yield* loadConversationContext({ branch, pr, repo });
       const selection = yield* selectComment(snapshot, reference);
       const mode = toMode(agent, json);
       yield* Effect.sync(() => {

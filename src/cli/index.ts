@@ -8,6 +8,7 @@ USAGE
   prdr <subcommand> [flags]
 
 SUBCOMMANDS
+  prs          List cursor-paged pull requests with compact status summaries
   inspect      Read a consistent pull request review snapshot
   list         List cursor-paged review findings with qualified references
   show         Render one comment safely; --agent and --json keep exact raw Markdown
@@ -17,8 +18,8 @@ SUBCOMMANDS
   review       Submit a GitHub pull request review from exact Markdown input
   resolve      Resolve a review thread
   unresolve    Unresolve a review thread
-  greptile     Inspect, trigger, and wait for Greptile review activity
-  aikido       Inspect and respond to Aikido Security review activity
+  greptile     Inspect Greptile review activity and manual recovery actions
+  aikido       Inspect Aikido Security review activity and confirmed false-positive actions
   skill        Print the bundled prdr agent skill
 
 Run prdr <subcommand> --help for command flags.`;

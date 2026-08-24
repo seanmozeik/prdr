@@ -90,14 +90,17 @@ export const loadPullRequestView = Effect.fn('Target.loadPullRequestView')(
   function* loadPullRequestView(
     repository: RepositoryTarget,
     pullRequest: number,
+    branch: string,
     repositoryWasExplicit: boolean,
   ) {
     const gh = yield* GhClient;
     const arguments_ = ['pr', 'view'];
     if (pullRequest > 0) {
       arguments_.push(String(pullRequest));
+    } else if (branch.length > 0) {
+      arguments_.push(branch);
     }
-    if (repositoryWasExplicit || pullRequest > 0) {
+    if (repositoryWasExplicit || pullRequest > 0 || branch.length > 0) {
       arguments_.push('--repo', repositorySelector(repository));
     }
     arguments_.push('--json', pullRequestFields);
@@ -107,22 +110,32 @@ export const loadPullRequestView = Effect.fn('Target.loadPullRequestView')(
 );
 
 export const resolvePullRequestContext = Effect.fn('Target.resolvePullRequestContext')(
-  function* resolvePullRequestContext(repository: string, pullRequest: number) {
+  function* resolvePullRequestContext(repository: string, pullRequest: number, branch: string) {
     if (!Number.isSafeInteger(pullRequest) || pullRequest < 0) {
       return yield* TargetResolutionError.make({
         detail: '--pr must be zero for inference or a positive safe integer.',
       });
     }
+    if (pullRequest > 0 && branch.length > 0) {
+      return yield* TargetResolutionError.make({
+        detail: 'Pass exactly one of --pr or --branch, or omit both for worktree inference.',
+      });
+    }
     const resolvedRepository = yield* resolveRepository(repository);
-    const view = yield* loadPullRequestView(resolvedRepository, pullRequest, repository.length > 0);
+    const view = yield* loadPullRequestView(
+      resolvedRepository,
+      pullRequest,
+      branch,
+      repository.length > 0,
+    );
     const target = { ...resolvedRepository, number: view.number } satisfies PullRequestTarget;
     return { pullRequest: view, target } satisfies PullRequestContext;
   },
 );
 
 export const resolvePullRequest = Effect.fn('Target.resolvePullRequest')(
-  function* resolvePullRequest(repository: string, pullRequest: number) {
-    const { target } = yield* resolvePullRequestContext(repository, pullRequest);
+  function* resolvePullRequest(repository: string, pullRequest: number, branch: string) {
+    const { target } = yield* resolvePullRequestContext(repository, pullRequest, branch);
     return target;
   },
 );
@@ -130,5 +143,5 @@ export const resolvePullRequest = Effect.fn('Target.resolvePullRequest')(
 export const reloadPullRequest = Effect.fn('Target.reloadPullRequest')(function* reloadPullRequest(
   target: PullRequestTarget,
 ) {
-  return yield* loadPullRequestView(target, target.number, true);
+  return yield* loadPullRequestView(target, target.number, '', true);
 });

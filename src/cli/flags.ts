@@ -14,11 +14,15 @@ export const repositoryFlag = Flag.string('repo').pipe(
   Flag.withDefault(''),
   Flag.withDescription('Target repository as OWNER/NAME or HOST/OWNER/NAME'),
 );
+export const branchFlag = Flag.string('branch').pipe(
+  Flag.withDefault(''),
+  Flag.withDescription('Target pull request head branch; mutually exclusive with --pr'),
+);
 export const pullRequestFlag = Flag.integer('pr').pipe(
   Flag.withDefault(0),
-  Flag.withDescription('Pull request number; infer it from the current branch when omitted'),
+  Flag.withDescription('Target pull request number; mutually exclusive with --branch'),
 );
-export const targetOptions = { pr: pullRequestFlag, repo: repositoryFlag };
+export const targetOptions = { branch: branchFlag, pr: pullRequestFlag, repo: repositoryFlag };
 
 export const bodyFileFlag = Flag.string('body-file').pipe(
   Flag.withDefault(''),

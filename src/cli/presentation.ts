@@ -1,6 +1,7 @@
 import type { ReviewListItem } from '../domain/listing';
 import type { PullRequestSnapshot } from '../domain/model';
 import type { ReviewListPage } from '../domain/pagination';
+import type { PullRequestListPage } from '../domain/pull-requests';
 import { renderMarkdown, sanitizeTerminalLine, tone } from '../lib/tty';
 
 const location = (item: ReviewListItem): string => {
@@ -48,6 +49,29 @@ export const printList = (page: ReviewListPage): void => {
     }
   }
   console.log(`Returned ${page.items.length} of ${page.total} matching item(s).`);
+  if (page.nextCursor !== null) {
+    console.log(`Next cursor: ${sanitizeTerminalLine(page.nextCursor)}`);
+  }
+};
+
+export const printPullRequestList = (page: PullRequestListPage): void => {
+  console.log(`${sanitizeTerminalLine(page.target.nameWithOwner)}: ${page.total} pull request(s)`);
+  if (page.items.length === 0) {
+    console.log(page.total === 0 ? 'No matching pull requests.' : 'No pull requests remain.');
+    return;
+  }
+  for (const item of page.items) {
+    const lifecycle = item.isDraft ? 'DRAFT' : item.state;
+    const age = item.ageDays === 0 ? '<1d' : `${item.ageDays}d`;
+    console.log(
+      `${tone.accent(`#${item.number}`)} ${sanitizeTerminalLine(lifecycle)} ${age} checks:${sanitizeTerminalLine(item.checkStatus ?? 'NONE')} review:${sanitizeTerminalLine(item.reviewDecision ?? 'NONE')} merge:${sanitizeTerminalLine(item.mergeStateStatus)}`,
+    );
+    console.log(`  ${sanitizeTerminalLine(item.title)}`);
+    console.log(`  ${sanitizeTerminalLine(item.summary)}`);
+    console.log(
+      `  ${sanitizeTerminalLine(item.headRefName)} -> ${sanitizeTerminalLine(item.baseRefName)} @${sanitizeTerminalLine(item.author)} ${item.commentCount} comment(s) ${item.reviewThreadCount} review thread(s)`,
+    );
+  }
   if (page.nextCursor !== null) {
     console.log(`Next cursor: ${sanitizeTerminalLine(page.nextCursor)}`);
   }

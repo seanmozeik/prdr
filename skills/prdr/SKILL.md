@@ -1,9 +1,9 @@
 ---
 name: prdr
 description: >-
-  Inspect, triage, reply to, edit, and resolve GitHub pull request review conversations with
-  prdr. Use for PR comments and review threads, exact Markdown-safe GitHub writes, Greptile
-  review loops, or Aikido Security findings and checks.
+  Find and select GitHub pull requests, then inspect, triage, reply to, edit, and resolve their
+  review conversations with prdr. Use for PR status, comments, review threads, exact
+  Markdown-safe GitHub writes, Greptile review state, or Aikido Security findings and checks.
 ---
 
 # prdr
@@ -23,25 +23,38 @@ before you run any of these commands:
 
 An Aikido ignore changes security-gate state. Use it only for a confirmed false positive and only
 when the user permits that exact action. Do not resolve a human or agent finding only because code
-changed. First verify the fix against the current pull request head.
+changed. First verify the fix against the selected pull request head.
 
-## Start with a consistent snapshot
+Greptile and Aikido normally start through repository automation. A missing result does not permit
+a manual trigger. Keep `greptile trigger` as a recovery command for an explicit user request or a
+verified integration failure with authority to post the trigger.
 
-Run this in the pull request worktree:
+## Select the pull request
+
+Prefer an explicit target when the request, issue, or prior tool result identifies one. If the pull
+request number is unknown, list a bounded page for the repository:
 
 ```nu
-prdr inspect --agent
-prdr list --state open --limit 50 --agent
+prdr prs --repo OWNER/REPOSITORY --state open --limit 30 --agent
 ```
 
-Outside the worktree, identify the target explicitly:
+Each item includes its number, title, compact body summary, age, author, branches, draft and
+lifecycle state, review decision, merge state, check state, and comment and thread counts. Filter
+with `--state`, `--base`, or `--branch`. Continue with `nextCursor` while `hasMore` is true, using
+the same repository and filters.
+
+Select one pull request by number or exact head branch:
 
 ```nu
+prdr inspect --repo OWNER/REPOSITORY --pr 123 --agent
 prdr list --repo OWNER/REPOSITORY --pr 123 --state open --agent
+prdr inspect --repo OWNER/REPOSITORY --branch feature/name --agent
 ```
 
-For GitHub Enterprise, use `HOST/OWNER/REPOSITORY`. If `prdr` reports that the head changed while
-it read the pull request, discard the result and run the command again.
+`--pr` and `--branch` are mutually exclusive. `--repo` accepts `OWNER/REPOSITORY` or
+`HOST/OWNER/REPOSITORY`. Omit the target flags only when the current worktree is the intended pull
+request. If `prdr` reports that the head changed while it read, discard the result and run the
+command again. Keep the same explicit selector on later reads and writes.
 
 Use qualified references from `prdr list`, such as `review-comment:123`, `issue-comment:456`, or
 `thread:PRRT_...`. Do not use a bare numeric ID when a qualified reference is available.
@@ -60,8 +73,8 @@ thread link under `data`. `data.comment.body` is the raw GitHub Markdown body.
 Continue until `hasMore` is false:
 
 ```nu
-let first = (prdr list --state open --limit 50 --agent | from json)
-prdr list --state open --limit 50 --cursor $first.data.nextCursor --agent
+let first = (prdr list --repo OWNER/REPOSITORY --pr 123 --state open --limit 50 --agent | from json)
+prdr list --repo OWNER/REPOSITORY --pr 123 --state open --limit 50 --cursor $first.data.nextCursor --agent
 ```
 
 Keep the same PR and filters for every page. The page size can change. A cursor binds to the PR,
@@ -73,7 +86,7 @@ that more content exists. Use its qualified `ref` with `show` to read the exact 
 treat a preview as the full finding.
 
 ```nu
-prdr show review-comment:123 --agent
+prdr show review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
 Do not remove HTML comments, `<details>` sections, code fences, indentation, or repeated blank
@@ -95,10 +108,10 @@ multi-line body as a shell argument. `prdr` JSON-encodes the body and sends it t
 standard input.
 
 ```nu
-prdr reply review-comment:123 --body-file /tmp/prdr-reply.md --agent
-prdr comment --body-file /tmp/prdr-comment.md --agent
-prdr edit issue-comment:456 --body-file /tmp/prdr-edit.md --agent
-prdr review --event approve --body-file /tmp/prdr-review.md --agent
+prdr reply review-comment:123 --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-reply.md --agent
+prdr comment --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-comment.md --agent
+prdr edit issue-comment:456 --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-edit.md --agent
+prdr review --repo OWNER/REPOSITORY --pr 123 --event approve --body-file /tmp/prdr-review.md --agent
 ```
 
 Use `--stdin` instead of `--body-file` only when the input source already preserves exact bytes.
@@ -116,9 +129,9 @@ Pass exactly one of these two options.
 8. Read the pull request again after each GitHub write.
 
 ```nu
-prdr reply review-comment:123 --body-file /tmp/prdr-reply.md --agent
-prdr resolve review-comment:123 --agent
-prdr unresolve thread:PRRT_example --agent
+prdr reply review-comment:123 --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-reply.md --agent
+prdr resolve review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
+prdr unresolve thread:PRRT_example --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
 `reply` always replies to the root of the selected inline thread. GitHub issue comments are not
@@ -126,10 +139,10 @@ threads. Use `comment` to add a new pull request conversation comment.
 
 ## Greptile
 
-Read Greptile state before you act:
+Assume repository automation starts Greptile. Read its state for the selected pull request:
 
 ```nu
-prdr greptile status --agent
+prdr greptile status --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
 The result includes `currentHead` and separates lightweight summaries for the latest activity and
@@ -139,29 +152,35 @@ thread `rootRef` with `show` to read exact Markdown. A later failure or progress
 erase the last completed review data. Compare `lastReviewedCommit` with `currentHead` before you
 trust a clean result.
 
-With user authority, request a new review or ask a question:
+When the automatic review is running, use the bounded wait command:
 
 ```nu
-prdr greptile trigger --agent
-prdr greptile ask --body-file /tmp/prdr-greptile-question.md --agent
-```
-
-`greptile ask` adds `@greptileai` only when the body does not already contain that mention. After a
-trigger, use the bounded wait command:
-
-```nu
-prdr greptile wait --interval-seconds 15 --timeout-seconds 600 --agent
+prdr greptile wait --repo OWNER/REPOSITORY --pr 123 --interval-seconds 15 --timeout-seconds 600 --agent
 ```
 
 The command stops when the reviewed commit matches the captured head. It fails on timeout or when
 the head changes. After it succeeds, read open Greptile threads and address each actionable finding.
 
-## Aikido Security
-
-Read both Aikido checks and open inline findings:
+The CLI also supports these manual Greptile actions:
 
 ```nu
-prdr aikido status --agent
+prdr greptile trigger --repo OWNER/REPOSITORY --pr 123 --agent
+prdr greptile ask --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-greptile-question.md --agent
+```
+
+`trigger` posts a Greptile review request for the selected head. It is supported for an explicit
+user request or recovery from a verified automatic-integration failure, but it is not the normal
+workflow. Check `status` first and use `wait` when an automatic review is already running. `ask` is
+a separate GitHub write for a user-requested question. It preserves the supplied Markdown and adds
+`@greptileai` only when the body does not already contain that mention. Both commands require
+authority for that exact GitHub write.
+
+## Aikido Security
+
+Assume repository automation starts Aikido Security. Read both its checks and open inline findings:
+
+```nu
+prdr aikido status --repo OWNER/REPOSITORY --pr 123 --agent
 ```
 
 The command returns `currentHead` and all open Aikido thread summaries. Use a summary's `rootRef`
@@ -172,7 +191,7 @@ needed. For a confirmed false positive, put a short, one-line reason in a file. 
 authority, run:
 
 ```nu
-prdr aikido ignore review-comment:123 --body-file /tmp/prdr-aikido-reason.txt --agent
+prdr aikido ignore review-comment:123 --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-aikido-reason.txt --agent
 ```
 
 This command replies with the provider syntax `@AikidoSec ignore: REASON`. Read the thread and
@@ -190,7 +209,9 @@ check again. Do not claim success until Aikido confirms the ignore or the check 
   the read again after activity settles.
 - A `ListPaginationError` means a page size or cursor is unsafe, or the result changed during page
   traversal. Restart without `--cursor` when the error asks for a fresh traversal.
+- A `PullRequestPaginationError` means the PR index page size or cursor is invalid, or the cursor
+  belongs to different repository filters. Restart `prs` without `--cursor`.
 - A `ProviderWaitTimeoutError` or `ProviderWaitHeadChangedError` stops a Greptile wait. Read the
-  current head and provider status before the next action.
+  selected head and provider status before the next action.
 - A `ThreadPermissionError` means the current GitHub account cannot do the requested thread action.
 - Keep `--agent` or `--json` on commands when another agent must parse the result.
