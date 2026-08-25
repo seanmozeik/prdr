@@ -1,14 +1,20 @@
 # prdr
 
 `prdr` is a typed command-line tool for GitHub pull requests and their review conversations. It
-lists compact pull request summaries, then gives coding agents one consistent view of issue
+lists compact pull request summaries, then gives coding agents one structured, token-efficient view of issue
 comments, submitted reviews, inline review comments, review threads, and checks. It also normalizes
-Greptile and Aikido Security state.
+Greptile and Aikido Security state. Compared to `gh` CLI, agents make fewer mistakes and act on PRs more reliably.
 
 The project is a full Bun and Effect rewrite of
 [`pbakaus/agent-reviews`](https://github.com/pbakaus/agent-reviews). The fork keeps the useful idea
 and replaces the original JavaScript implementation, inferred thread state, and shell-sensitive
 comment writes.
+
+Install:
+
+```bash
+bun i -g --linker hoisted @seanmozeik/prdr
+```
 
 ## What it fixes
 
