@@ -1,6 +1,6 @@
-# prdr
+# PR Doctor
 
-`prdr` is a typed command-line tool for GitHub pull requests and their review conversations. It
+PR Doctor, `prdr`, is a typed command-line tool for GitHub pull requests and their review conversations. It
 lists compact pull request summaries, then gives coding agents one structured, token-efficient view of issue
 comments, submitted reviews, inline review comments, review threads, and checks. It also normalizes
 Greptile and Aikido Security state. Compared to `gh` CLI, agents make fewer mistakes and act on PRs more reliably.
