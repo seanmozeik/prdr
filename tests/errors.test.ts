@@ -13,6 +13,23 @@ import {
   UnsupportedMutationError,
 } from '../src/domain/errors';
 import {
+  ExistingPullRequestError,
+  PullRequestIdentityError,
+  PullRequestInputError,
+  PullRequestPermissionError,
+  PullRequestValidationError,
+  PullRequestVerificationError,
+  StaleHeadError,
+  StateConflictError,
+  UnsupportedRepositoryPolicyError,
+} from '../src/domain/pull-request-errors';
+import {
+  BoundedPaginationError,
+  BranchUnavailableError,
+  ContextPaginationError,
+  DiffCoordinateError,
+} from '../src/domain/pull-request-read-errors';
+import {
   GhCommandError,
   GhDecodeError,
   GhEncodeError,
@@ -57,6 +74,19 @@ describe('CLI error messages', () => {
       PullRequestPaginationError.make({ detail: 'Bad pull request cursor.' }),
       ThreadNotFoundError.make({ reference: 'thread:missing' }),
       UnsupportedMutationError.make({ detail: 'Unsupported.', reference: 'review:1' }),
+      PullRequestInputError.make({ detail: 'Bad input.', operation: 'update' }),
+      PullRequestIdentityError.make({ detail: 'Wrong pull request.' }),
+      StaleHeadError.make({ actual: 'def', expected: 'abc', operation: 'merge' }),
+      StateConflictError.make({ actual: 'closed', expected: 'open', operation: 'review' }),
+      ExistingPullRequestError.make({ number: 42, url: 'https://example.com/pull/42' }),
+      PullRequestPermissionError.make({ operation: 'merge', required: 'write' }),
+      UnsupportedRepositoryPolicyError.make({ detail: 'Queue is off.', operation: 'queue' }),
+      PullRequestValidationError.make({ detail: 'Bad request.', operation: 'create' }),
+      PullRequestVerificationError.make({ detail: 'State differs.', operation: 'update' }),
+      BoundedPaginationError.make({ actual: 1, expected: 2, resource: 'files' }),
+      ContextPaginationError.make({ detail: 'Bad context cursor.' }),
+      BranchUnavailableError.make({ branch: 'feature', repo: 'example/prdr' }),
+      DiffCoordinateError.make({ detail: 'Bad line.', path: 'src/example.ts' }),
       GhDecodeError.make({ arguments: ['api'], causeMessage: 'bad JSON' }),
       GhEncodeError.make({ arguments: ['api'], causeMessage: 'bad input' }),
       GhGraphqlError.make({ messages: ['GraphQL failed.'] }),
@@ -70,5 +100,11 @@ describe('CLI error messages', () => {
     for (const error of errors) {
       expect(error.message.trim().length).toBeGreaterThan(0);
     }
+  });
+
+  it('gives a missing branch an exact repository recovery path', () => {
+    const error = BranchUnavailableError.make({ branch: 'feature/name', repo: 'wrong/repo' });
+
+    expect(error.message).toContain('prdr target --mode branch --branch feature/name');
   });
 });

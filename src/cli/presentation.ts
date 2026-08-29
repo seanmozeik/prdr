@@ -105,5 +105,14 @@ export const printMutation = (value: unknown): void => {
     console.log(sanitizeTerminalLine(value.html_url));
     return;
   }
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'url' in value &&
+    typeof value.url === 'string'
+  ) {
+    console.log(sanitizeTerminalLine(value.url));
+    return;
+  }
   console.log(sanitizeTerminalLine(JSON.stringify(value)));
 };

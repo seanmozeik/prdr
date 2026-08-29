@@ -1,6 +1,6 @@
 {
   "name": "@seanmozeik/prdr",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "A typed GitHub pull request review CLI for coding agents.",
   "keywords": [
     "agent-skill",
@@ -48,8 +48,8 @@
   },
   "devDependencies": {
     "@effect/platform-bun": "4.0.0-rc.111",
-    "@effect/tsgo": "0.36.5",
-    "@seanmozeik/de-clank": "0.1.5",
+    "@effect/tsgo": "0.38.0",
+    "@seanmozeik/de-clank": "0.1.8",
     "@types/bun": "1.4.0",
     "effect": "4.0.0-rc.111",
     "oxfmt": "0.65.0",

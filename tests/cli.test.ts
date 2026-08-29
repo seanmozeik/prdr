@@ -34,8 +34,10 @@ const makeFakeGh = (): string => {
   const directory = mkdtempSync(path.join(tmpdir(), 'prdr-cli-'));
   temporaryDirectories.push(directory);
   const executable = path.join(directory, 'gh');
+  const commentFile = path.join(directory, 'comment.json');
   const script = `#!${process.execPath}
 const args = process.argv.slice(2);
+const commentFile = ${JSON.stringify(commentFile)};
 if (process.env.PRDR_FAKE_GH_HANG === '1') {
   await Bun.sleep(10_000);
 }
@@ -139,6 +141,41 @@ if (args[0] === 'pr' && args[1] === 'view') {
       }
     }
   }));
+} else if (args[0] === 'api' && args[1] === 'graphql' && input.includes('query PrdrWorkflowState')) {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          autoMergeRequest: null,
+          baseRefName: 'main',
+          baseRefOid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          body: '',
+          headRefName: 'feature',
+          headRefOid: '0123456789abcdef0123456789abcdef01234567',
+          id: 'PR_42',
+          isDraft: false,
+          locked: false,
+          mergeQueueEntry: null,
+          mergeStateStatus: 'CLEAN',
+          mergeable: 'MERGEABLE',
+          merged: false,
+          number: 42,
+          repository: { id: 'R_1', nameWithOwner: 'example/prdr', viewerPermission: 'WRITE' },
+          reviewDecision: null,
+          state: 'OPEN',
+          title: 'Test pull request',
+          url: 'https://github.com/example/prdr/pull/42',
+          viewerCanClose: true,
+          viewerCanDisableAutoMerge: false,
+          viewerCanEnableAutoMerge: true,
+          viewerCanMergeAsAdmin: false,
+          viewerCanReopen: false,
+          viewerCanUpdate: true,
+          viewerCanUpdateBranch: true
+        }
+      }
+    }
+  }));
 } else if (args[0] === 'api' && args[1] === 'graphql' && input === '') {
   process.stdout.write(JSON.stringify({
     data: {
@@ -152,14 +189,18 @@ if (args[0] === 'pr' && args[1] === 'view') {
       }
     }
   }));
+} else if (args[0] === 'api' && endpoint.includes('/issues/comments/1')) {
+  process.stdout.write(await Bun.file(commentFile).text());
 } else if (args[0] === 'api' && input !== '') {
   const body = input === '' ? '' : JSON.parse(input).body;
-  process.stdout.write(JSON.stringify({
+  const comment = {
     body,
     html_url: 'https://github.com/example/prdr/comment/1\\u001b]52;c;YWJj\\u0007\\nforged',
     id: 1,
     node_id: 'IC_1'
-  }));
+  };
+  await Bun.write(commentFile, JSON.stringify(comment));
+  process.stdout.write(JSON.stringify(comment));
 } else if (endpoint.includes('/pulls/42/comments?')) {
   process.stdout.write('[[]]');
 } else if (endpoint.includes('/issues/42/comments?')) {
@@ -230,6 +271,10 @@ describe('CLI process contract', () => {
 
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('USAGE');
+    expect(help.stdout).toContain('target');
+    expect(help.stdout).toContain('context');
+    expect(help.stdout).toContain('create');
+    expect(help.stdout).toContain('merge');
     expect(help.stderr).toBe('');
     expect(version.exitCode).toBe(0);
     expect(version.stdout).toMatch(/^prdr v\d+\.\d+\.\d+\n$/u);
@@ -489,6 +534,23 @@ describe('CLI process contract', () => {
     expect(help.stdout).toContain('--branch');
     expect(help.stdout).toContain('--pr');
     expect(help.stdout).toContain('--repo');
+  });
+
+  it('shows repository recovery and comparison flags without invoking gh', async () => {
+    const targetHelp = await runCli(['target', '--help'], '', '');
+    const contextHelp = await runCli(['context', '--help'], '', '');
+
+    expect(targetHelp.exitCode).toBe(0);
+    expect(targetHelp.stdout).toContain('--branch');
+    expect(targetHelp.stdout).toContain('--cursor');
+    expect(targetHelp.stdout).toContain('--directory');
+    expect(targetHelp.stdout).toContain('--mode');
+    expect(targetHelp.stdout).toContain('--query');
+    expect(contextHelp.exitCode).toBe(0);
+    expect(contextHelp.stdout).toContain('--base-sha');
+    expect(contextHelp.stdout).toContain('--head-repo');
+    expect(contextHelp.stdout).toContain('--head-sha');
+    expect(contextHelp.stdout).toContain('--purpose');
   });
 
   it('cancels a stalled gh process at the Greptile deadline', async () => {

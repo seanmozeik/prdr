@@ -1,10 +1,12 @@
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { Argument, Command, Flag } from 'effect/unstable/cli';
 
 import { markdownOptions, outputMode, targetOptions } from '../cli/flags';
 import { printMutation } from '../cli/presentation';
 import { emit, loadMutationContext, toMode } from '../cli/shared';
 import { readMarkdown } from '../domain/markdown';
+import { PullRequestInputError } from '../domain/pull-request-errors';
+import { ReviewSubmissionInput } from '../domain/pull-request-review';
 import { selectComment, selectThread } from '../domain/selection';
 import {
   createIssueComment,
@@ -29,6 +31,17 @@ const threadReferenceArgument = Argument.string('reference').pipe(
 const reviewEventFlag = Flag.choice('event', ['comment', 'approve', 'request-changes']).pipe(
   Flag.withDefault('comment'),
   Flag.withDescription('GitHub review event'),
+);
+const expectedHeadFlag = Flag.string('expected-head').pipe(
+  Flag.withDefault(''),
+  Flag.withDescription('Expected complete pull request head SHA'),
+);
+const reviewRequestStdinFlag = Flag.boolean('request-stdin').pipe(
+  Flag.withDefault(false),
+  Flag.withDescription('Read one typed review request as JSON from standard input'),
+);
+const decodeReviewSubmissionJson = Schema.decodeEffect(
+  Schema.fromJsonString(ReviewSubmissionInput),
 );
 
 const emitMutation = (agent: boolean, json: boolean, command: string, value: object): void => {
@@ -91,21 +104,58 @@ export const editCommand = Command.make(
 
 export const reviewCommand = Command.make(
   'review',
-  { ...markdownOptions, ...outputMode, ...targetOptions, event: reviewEventFlag },
-  ({ agent, bodyFile, branch, event, json, pr, repo, stdin }) =>
+  {
+    ...markdownOptions,
+    ...outputMode,
+    ...targetOptions,
+    event: reviewEventFlag,
+    expectedHead: expectedHeadFlag,
+    requestStdin: reviewRequestStdinFlag,
+  },
+  ({ agent, bodyFile, branch, event, expectedHead, json, pr, repo, requestStdin, stdin }) =>
     Effect.gen(function* reviewCommandGen() {
-      const body = yield* readMarkdown({ bodyFile, stdin });
+      if (requestStdin && (bodyFile !== '' || stdin)) {
+        return yield* PullRequestInputError.make({
+          detail: '--request-stdin is mutually exclusive with --body-file and --stdin.',
+          operation: 'review',
+        });
+      }
+      const request = requestStdin
+        ? yield* Effect.tryPromise({
+            catch: (cause) =>
+              PullRequestInputError.make({
+                detail: cause instanceof Error ? cause.message : String(cause),
+                operation: 'review',
+              }),
+            try: () => Bun.stdin.text(),
+          }).pipe(
+            Effect.flatMap(decodeReviewSubmissionJson),
+            Effect.mapError((error) =>
+              error._tag === 'PullRequestInputError'
+                ? error
+                : PullRequestInputError.make({ detail: String(error), operation: 'review' }),
+            ),
+          )
+        : { body: yield* readMarkdown({ bodyFile, stdin }), event, expectedHead, findings: [] };
+      if (request.expectedHead === '') {
+        return yield* PullRequestInputError.make({
+          detail: '--expected-head is required for the simple review form.',
+          operation: 'review',
+        });
+      }
       const context = yield* resolvePullRequestContext(repo, pr, branch);
-      const githubEvent = toReviewEvent(event);
+      const githubEvent = toReviewEvent(request.event);
       const review = yield* submitReview(
         context.target,
         githubEvent,
-        body,
-        context.pullRequest.headRefOid,
+        request.body,
+        request.expectedHead,
+        request.findings,
       );
       yield* Effect.sync(() => {
         emitMutation(agent, json, 'review', review);
       });
+      return yield* Effect.void;
     }),
 ).pipe(Command.withDescription('Submit a GitHub pull request review from exact Markdown input'));
 

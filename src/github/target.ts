@@ -81,7 +81,15 @@ export const resolveRepository = Effect.fn('Target.resolveRepository')(function*
   }
   const gh = yield* GhClient;
   const arguments_ = ['repo', 'view', '--json', 'nameWithOwner,url'];
-  const result = yield* gh.run(ghRequest(arguments_));
+  const result = yield* gh
+    .run(ghRequest(arguments_))
+    .pipe(
+      Effect.catchTag('GhCommandError', (error) =>
+        TargetResolutionError.make({
+          detail: `Could not infer a repository from the current worktree. Run prdr target --mode worktree from the repository, use --directory ABSOLUTE_PATH, or run prdr target --mode repository --query REPOSITORY_NAME. ${error.message}`,
+        }),
+      ),
+    );
   const view = yield* decodeGhJson(RepositoryView, result, arguments_);
   return yield* parseRepository(view.nameWithOwner, view.url);
 });
@@ -104,7 +112,15 @@ export const loadPullRequestView = Effect.fn('Target.loadPullRequestView')(
       arguments_.push('--repo', repositorySelector(repository));
     }
     arguments_.push('--json', pullRequestFields);
-    const result = yield* gh.run(ghRequest(arguments_));
+    const result = yield* gh
+      .run(ghRequest(arguments_))
+      .pipe(
+        Effect.catchTag('GhCommandError', (error) =>
+          TargetResolutionError.make({
+            detail: `Could not resolve this pull request selector. Run prdr target --mode worktree from the repository, prdr target --mode repository --query REPOSITORY_NAME, or prdr target --mode branch --branch HEAD_BRANCH. ${error.message}`,
+          }),
+        ),
+      );
     return yield* decodeGhJson(PullRequestView, result, arguments_);
   },
 );

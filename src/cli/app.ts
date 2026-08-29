@@ -2,7 +2,21 @@ import { BunRuntime, BunServices } from '@effect/platform-bun';
 import { Cause, Console as EffectConsole, Effect, Layer, Schema } from 'effect';
 import { CliError, Command } from 'effect/unstable/cli';
 
+import { createPullRequestCommand } from '../commands/create-pull-request';
 import { aikidoCommand, greptileCommand } from '../commands/providers';
+import { contextCommand, targetCommand } from '../commands/pull-request-context';
+import {
+  archivePullRequestCommand,
+  autoMergeCommand,
+  mergeCommand,
+  queueCommand,
+  revertCommand,
+  reviewersCommand,
+  transitionCommand,
+  unarchivePullRequestCommand,
+  updateBranchCommand,
+  updateCommand,
+} from '../commands/pull-request-workflow';
 import { pullRequestsCommand } from '../commands/pull-requests';
 import { inspectCommand, listCommand, showCommand } from '../commands/read';
 import {
@@ -19,9 +33,15 @@ import { type StructuredOutputMode, writeStructuredFailure } from './output';
 import { skillCommand } from './skill';
 
 const app = Command.make('prdr', {}, () => Effect.void).pipe(
-  Command.withDescription('Read and update GitHub pull request review conversations safely'),
+  Command.withDescription('Create, read, and update GitHub pull request conversations safely'),
   Command.withSubcommands([
     pullRequestsCommand,
+    targetCommand,
+    contextCommand,
+    createPullRequestCommand,
+    transitionCommand,
+    updateCommand,
+    updateBranchCommand,
     inspectCommand,
     listCommand,
     showCommand,
@@ -29,8 +49,15 @@ const app = Command.make('prdr', {}, () => Effect.void).pipe(
     replyCommand,
     editCommand,
     reviewCommand,
+    reviewersCommand,
     resolveCommand,
     unresolveCommand,
+    autoMergeCommand,
+    queueCommand,
+    mergeCommand,
+    revertCommand,
+    archivePullRequestCommand,
+    unarchivePullRequestCommand,
     greptileCommand,
     aikidoCommand,
     skillCommand,

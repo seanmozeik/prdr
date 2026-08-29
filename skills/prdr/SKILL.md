@@ -1,9 +1,9 @@
 ---
 name: prdr
 description: >-
-  Find and select GitHub pull requests, then inspect, triage, reply to, edit, and resolve their
-  review conversations with prdr. Use for PR status, comments, review threads, exact
-  Markdown-safe GitHub writes, Greptile review state, or Aikido Security findings and checks.
+  Find, author, review, and deliver GitHub pull requests through typed prdr operations. Use for
+  target discovery, exact PR context, pinned creation, lifecycle changes, reviews, reviewers,
+  merge delivery, exact Markdown writes, Greptile, or Aikido Security.
 ---
 
 # prdr
@@ -18,6 +18,8 @@ before you run any of these commands:
 
 - `comment`, `reply`, `edit`, or `review`
 - `resolve` or `unresolve`
+- `create`, `transition`, `update`, `update-branch`, or `reviewers`
+- `auto-merge`, `queue`, `merge`, `revert`, `archive`, or `unarchive`
 - `greptile trigger` or `greptile ask`
 - `aikido ignore`
 
@@ -38,6 +40,47 @@ request number is unknown, list a bounded page for the repository:
 prdr prs --repo OWNER/REPOSITORY --state open --limit 30 --agent
 ```
 
+Do not guess a repository owner. Use the account that is logged in through `gh` to resolve it.
+
+From the repository worktree, resolve its exact remote:
+
+```nu
+prdr target --mode worktree --agent
+prdr target --mode worktree --directory /absolute/path/to/project --agent
+```
+
+If only a repository name or a failed owner/repository guess is known, search all repositories that
+the logged-in account can see:
+
+```nu
+prdr target --mode repository --query repository-name --limit 10 --agent
+prdr target --mode repository --query WRONG_OWNER/repository-name --limit 10 --agent
+```
+
+This search includes private repositories where the account is an organization member or a
+collaborator. Each item states its exact `repo`, visibility, permission, archive state, and default
+branch.
+
+If only a head branch is known, search bounded pull request candidates:
+
+```nu
+prdr target --mode branch --branch feature/name --state open --limit 10 --agent
+```
+
+For Shim, use one of these strict inputs before another `prdr` tool:
+
+```ts
+tools.prdr.target({ mode: 'worktree', directory: '/absolute/path/to/project' });
+tools.prdr.target({ mode: 'repository', query: 'repository-name' });
+tools.prdr.target({ mode: 'branch', branch: 'feature/name' });
+```
+
+Every other Shim `prdr` tool requires `repo`. Copy it from the target result. Each PR-scoped read
+also requires exactly one `pr` or `branch`; each mutation requires `pr`. Shim does not infer the
+agent's worktree, branch, or pull request. Continue with `nextCursor` while `hasMore` is true. A
+branch result gives exact `base.repo` and `head.repo` values. If there are several candidates,
+continue the search or ask the user to select one. Do not stop after one failed owner.
+
 Each item includes its number, title, compact body summary, age, author, branches, draft and
 lifecycle state, review decision, merge state, check state, and comment and thread counts. Filter
 with `--state`, `--base`, or `--branch`. Continue with `nextCursor` while `hasMore` is true, using
@@ -52,8 +95,9 @@ prdr inspect --repo OWNER/REPOSITORY --branch feature/name --agent
 ```
 
 `--pr` and `--branch` are mutually exclusive. `--repo` accepts `OWNER/REPOSITORY` or
-`HOST/OWNER/REPOSITORY`. Omit the target flags only when the current worktree is the intended pull
-request. If `prdr` reports that the head changed while it read, discard the result and run the
+`HOST/OWNER/REPOSITORY`. In the CLI, omit the target flags only when the current worktree is the
+intended pull request. Shim always requires `repo`. If `prdr` reports that the head changed while it
+read, discard the result and run the
 command again. Keep the same explicit selector on later reads and writes.
 
 Use qualified references from `prdr list`, such as `review-comment:123`, `issue-comment:456`, or
@@ -68,6 +112,26 @@ an unknown protocol version before parsing `data`.
 `inspect --agent` returns PR state, review counts, every open finding summary, and checks that need
 attention. It omits Markdown bodies and passing check names. `openItems` is complete and is not
 truncated. Use `inspect --json` only when raw snapshot fields are required.
+
+Use `context` when the task needs the exact authoring or review state:
+
+```nu
+prdr context --repo OWNER/REPOSITORY --pr 123 --purpose review --limit 25 --agent
+```
+
+The result has the exact title and Markdown body, repository and PR identity, author, lifecycle
+state, base and head refs with full SHAs, commit summaries, changed files, diff totals, checks that
+need attention, reviews, and unresolved threads. Each section has `total` and `truncated`. Continue
+with `nextCursor` while `hasMore` is true. Use `purpose=authoring` for short thread summaries. Use
+`purpose=review` for exact unresolved thread bodies. GitHub does not expose the pull request archive
+flag on public reads. `lifecycle.archiveState=not-exposed` states this limit and does not infer the
+flag from closed or locked state.
+
+Before creation, pass `--repo`, `--base`, `--base-sha`, `--head-repo`, `--head`, and `--head-sha`
+to `context`. This gives a pinned base and head comparison with bounded commit pages and explicit
+changed-file limits. GitHub returns changed files and diff totals only on the first comparison
+page. Retain page one while you continue commit pages. Later pages explicitly mark the file map and
+totals as omitted.
 
 `list` defaults to open review threads. Use `--state all` when you need issue comments, submitted
 review history, unthreaded comments, or resolved threads. Empty review events are omitted. It
@@ -109,19 +173,55 @@ prdr list --author reviewer-login --agent
 
 ## Write exact Markdown
 
-Write the proposed body to a file, inspect that file, then give it to `prdr`. Do not pass a
-multi-line body as a shell argument. `prdr` JSON-encodes the body and sends it to `gh api` through
-standard input.
+Do not pass a multi-line body as a shell argument. Pipe exact Markdown through standard input.
+`prdr` JSON-encodes the body and sends it to `gh api` through standard input.
 
 ```nu
-prdr reply review-comment:123 --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-reply.md --agent
-prdr comment --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-comment.md --agent
-prdr edit issue-comment:456 --repo OWNER/REPOSITORY --pr 123 --body-file /tmp/prdr-edit.md --agent
-prdr review --repo OWNER/REPOSITORY --pr 123 --event approve --body-file /tmp/prdr-review.md --agent
+$body | prdr reply review-comment:123 --repo OWNER/REPOSITORY --pr 123 --stdin --agent
+$body | prdr comment --repo OWNER/REPOSITORY --pr 123 --stdin --agent
+$body | prdr edit issue-comment:456 --repo OWNER/REPOSITORY --pr 123 --stdin --agent
+$body | prdr review --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --event approve --stdin --agent
 ```
 
-Use `--stdin` instead of `--body-file` only when the input source already preserves exact bytes.
-Pass exactly one of these two options.
+The CLI also accepts `--body-file`. Pass exactly one of `--stdin` or `--body-file`. The Shim tools
+accept a direct `body` string and always use standard input. They do not create a temporary file.
+
+## Author and manage a pull request
+
+Create requires exact remote base and head SHAs, readiness, title, and body. Resolve uncertain
+repositories with `target` first. `create` checks both remote refs again just before the write. It
+stops on a missing branch, stale SHA, or matching open pull request.
+
+Use these typed operations after creation:
+
+- `transition --action close|reopen|mark-ready|convert-draft`
+- `update` for title, exact body, or base
+- `update-branch --method merge|rebase`
+- `reviewers --action request|remove --user LOGIN --team SLUG`
+
+Every write needs `--expected-head` where the command supports it. Copy the full SHA from a current
+`context` result. Do not abbreviate it.
+
+One `review` can include several inline findings. For each finding, give `path`, `line`, `side`, and
+`body`. A range also needs `startLine` and `startSide`. `prdr` verifies the current diff coordinates
+before it creates the atomic review.
+
+## Deliver a pull request
+
+Use the separate delivery operations because their effects and permissions differ:
+
+- `auto-merge --action enable|disable`; enable also needs `--strategy`
+- `queue --action enqueue|dequeue`
+- `merge --strategy merge|rebase|squash`
+- `revert` with exact title, body, and readiness for the new pull request
+- `archive` or `unarchive`
+
+Merge requires a pinned head and stops when checks need attention, review changes are requested, a
+thread is unresolved, or repository policy blocks delivery. Revert operates only on a merged pull
+request and returns the new revert pull request. Archive and unarchive require administration
+permission. They verify the named mutation payload, repository and PR identity, head, and a second
+read. Archive also verifies the visible closed and locked consequences. Get authority for the exact
+operation before you call it.
 
 ## Review-thread workflow
 
@@ -217,6 +317,15 @@ check again. Do not claim success until Aikido confirms the ignore or the check 
   traversal. Restart without `--cursor` when the error asks for a fresh traversal.
 - A `PullRequestPaginationError` means the PR index page size or cursor is invalid, or the cursor
   belongs to different repository filters. Restart `prs` without `--cursor`.
+- A `StaleHeadError` means the full expected SHA is not current. Read `context` again. Do not retry
+  the write with a different SHA until the intended change is still valid.
+- An `ExistingPullRequestError` gives the matching open pull request. Use that pull request instead
+  of creating a duplicate.
+- A `BranchUnavailableError` means the remote branch cannot be used. Call `target` to recover the
+  correct repository and owner before you stop.
+- A `PullRequestVerificationError` means GitHub accepted a write but the read-back state differs.
+  Stop and inspect the current pull request. Do not report success.
+- An `UnsupportedRepositoryPolicyError` means repository rules do not support or permit the action.
 - A `ProviderWaitTimeoutError` or `ProviderWaitHeadChangedError` stops a Greptile wait. Read the
   selected head and provider status before the next action.
 - A `ThreadPermissionError` means the current GitHub account cannot do the requested thread action.

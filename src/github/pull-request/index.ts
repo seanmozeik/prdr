@@ -2,19 +2,19 @@ import { Buffer } from 'node:buffer';
 
 import { Clock, Effect, Schema } from 'effect';
 
-import { PullRequestPaginationError } from '../domain/errors';
-import type { RepositoryTarget } from '../domain/model';
+import { PullRequestPaginationError } from '../../domain/errors';
+import type { RepositoryTarget } from '../../domain/model';
 import {
   type PullRequestListFilters,
   type PullRequestListOptions,
   type PullRequestListPage,
   type PullRequestListRecord,
   summarizePullRequest,
-} from '../domain/pull-requests';
-import { decodeGhJson, GhClient, ghRequest } from './client';
-import { GhGraphqlError, TargetResolutionError } from './errors';
-import { pullRequestsQuery } from './queries';
-import { resolveRepository } from './target';
+} from '../../domain/pull-requests';
+import { decodeGhJson, GhClient, ghRequest } from '../client';
+import { GhGraphqlError, TargetResolutionError } from '../errors';
+import { pullRequestsQuery } from '../queries';
+import { resolveRepository } from '../target';
 
 const CURSOR_VERSION = 1 as const;
 const MAXIMUM_CURSOR_LENGTH = 8192;
@@ -82,6 +82,7 @@ const PullRequestCursor = Schema.Struct({
   version: Schema.Literal(CURSOR_VERSION),
 });
 type PullRequestCursor = typeof PullRequestCursor.Type;
+const decodePullRequestCursorJson = Schema.decodeEffect(Schema.fromJsonString(PullRequestCursor));
 
 const paginationError = (detail: string): PullRequestPaginationError =>
   PullRequestPaginationError.make({ detail });
@@ -97,7 +98,7 @@ const decodeCursor = Effect.fn('PullRequests.decodeCursor')(function* decodeCurs
     catch: () => paginationError('The pull request cursor is invalid. Start again without it.'),
     try: () => Buffer.from(raw, 'base64url').toString('utf8'),
   });
-  return yield* Schema.decodeEffect(Schema.fromJsonString(PullRequestCursor))(json).pipe(
+  return yield* decodePullRequestCursorJson(json).pipe(
     Effect.mapError(() =>
       paginationError('The pull request cursor is invalid. Start again without it.'),
     ),

@@ -14,7 +14,20 @@ const replaceExactlyOnce = (
   if (matches.length !== 1) {
     throw new TypeError(`Formula must contain exactly one ${field} field.`);
   }
-  return source.replace(pattern, `$<prefix>${value}$<suffix>`);
+  return source.replace(pattern, (...arguments_: unknown[]) => {
+    const groups = arguments_.at(-1);
+    if (
+      typeof groups !== 'object' ||
+      groups === null ||
+      !('prefix' in groups) ||
+      typeof groups.prefix !== 'string' ||
+      !('suffix' in groups) ||
+      typeof groups.suffix !== 'string'
+    ) {
+      throw new TypeError(`Formula ${field} field did not expose its named captures.`);
+    }
+    return `${groups.prefix}${value}${groups.suffix}`;
+  });
 };
 
 export const updateFormula = (source: string, version: string, checksum: string): string => {

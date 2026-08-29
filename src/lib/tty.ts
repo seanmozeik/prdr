@@ -1,21 +1,4 @@
-/* Typography + markdown→ANSI rendering for human terminal output.
- *
- * Built on Bun's primitives — no extra deps:
- *   - `Bun.color(input, "ansi")` auto-detects 16 / 256 / 16m and emits the right escape.
- *   - `Bun.color(input, "[rgb]")` returns `[r,g,b]` for building bg + fg combos.
- *   - `Bun.markdown.render(md, callbacks)` is the GFM AST walker (Zig).
- *   - `Bun.stringWidth(s)` handles emoji / wide chars / soft hyphens correctly.
- *
- * Palette: **Catppuccin Frappé** (the theme `markdown-display` defaults to). Semantic
- * roles map exactly to that project's resolver:
- *   bold      → pink  (#f4b8e4)
- *   italic    → sky   (#99d1db)
- *   code      → rosewater on mantle (#f2d5cf / #292c3c)
- *   h1 mauve, h2 lavender, h3 blue, h4 teal
- *   link/accent → blue (#8caaee)
- *   success → green, warning → peach, error → red
- *   muted overlay1, subtle surface1
- */
+/* Bun renders Markdown and selects terminal colors. The palette is Catppuccin Frappé. */
 
 const ESC = '\u001B';
 const RESET = `${ESC}[0m`;

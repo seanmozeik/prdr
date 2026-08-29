@@ -4,7 +4,7 @@ import { Effect, Layer } from 'effect';
 
 import { type PullRequestListRecord, summarizePullRequest } from '../src/domain/pull-requests';
 import { GhClient, type GhRequest, type GhResult } from '../src/github/client';
-import { listPullRequests } from '../src/github/pull-requests';
+import { listPullRequests } from '../src/github/pull-request';
 
 const jsonResult = (value: unknown): GhResult => ({
   exitCode: 0,

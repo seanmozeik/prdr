@@ -34,6 +34,12 @@ bun i -g --linker hoisted @seanmozeik/prdr
   without losing the rest of the result set.
 - Bot detection recognizes Aikido, Codex, Cursor, and Greptile identities, then uses the GitHub actor
   type for other bots. A human login that contains the text `bot` is still a human.
+- `target` normalizes a repository URL or repository name. It can also search for bounded pull
+  request candidates when only a head branch is known. Agents do not have to guess the owner.
+- `context` returns the exact title and Markdown body with bounded commits, files, checks, reviews,
+  and unresolved threads. Each section states its total and truncation state.
+- Every lifecycle write uses one explicit action. It checks the repository, pull request, full head
+  SHA, lifecycle state, and permission before the write. It reads the result again after the write.
 
 GitHub documents the thread fields and resolve mutations in its
 [`PullRequestReviewThread` GraphQL reference](https://docs.github.com/en/graphql/reference/objects#pullrequestreviewthread).
@@ -45,7 +51,7 @@ and GitHub's [raw review comment API](https://docs.github.com/en/rest/pulls/comm
 - Bun 1.4.0 or later
 - Effect and `@effect/platform-bun` 4.0.0-rc.111
 - TypeScript 7.0.2 with `@effect/tsgo`
-- `@seanmozeik/de-clank` 0.1.5
+- `@seanmozeik/de-clank` 0.1.8
 - Oxlint 1.80 and Oxfmt 0.65
 
 The small CLI launcher answers root `--help` and `--version` without loading Effect. The build
@@ -86,10 +92,40 @@ Use an explicit repository and pull request when the agent already knows them. `
 pull request from the current worktree. The explicit `--repo` and `--pr` pair is the fastest path
 because it does not need a separate target-resolution request.
 
+Do not guess a repository owner. `target` uses the account that is logged in through `gh`. It can
+resolve a local worktree, search repositories that this account can access, or search pull requests
+by head branch.
+
+```nu
+prdr target --mode worktree --agent
+prdr target --mode worktree --directory /absolute/path/to/project --agent
+prdr target --mode repository --query repository-name --limit 10 --agent
+prdr target --mode repository --query WRONG_OWNER/repository-name --limit 10 --agent
+prdr target --mode branch --branch feature/name --state open --limit 10 --agent
+```
+
+Worktree mode asks `gh repo view` to resolve the remote in that directory. The owner can be an
+organization or another user. Repository mode searches all repositories that the logged-in account
+can see. This includes private repositories where the account is an organization member or a
+collaborator. If an exact owner/repository value does not resolve, repository mode searches its
+repository-name part instead of stopping.
+
+The result states its `kind`. A `repository` result has one verified repository. A
+`repository-candidates` result includes visibility, permission, archive state, default branch, and
+the exact `repo` value. A `pull-request-candidates` result includes exact `base.repo` and
+`head.repo` values, branch names, and the full head SHA. Use `nextCursor` while `hasMore` is true.
+Copy a returned repository value. Do not replace its owner with the logged-in user.
+
+The Shim `prdr.target` tool requires an explicit mode. Worktree mode also requires an absolute
+`directory`. Every other Shim `prdr` tool requires the exact `repo` returned by `target`. Each
+PR-scoped read also requires exactly one `pr` or `branch`; each mutation requires `pr`. This stops
+the Shim daemon from using its own working directory or a guessed owner, branch, or pull request.
+
 ```nu
 prdr prs --repo OWNER/REPOSITORY --state open --limit 30 --agent
 prdr inspect --repo OWNER/REPOSITORY --pr 123 --agent
 prdr inspect --repo OWNER/REPOSITORY --branch feature/name --agent
+prdr context --repo OWNER/REPOSITORY --pr 123 --purpose review --limit 25 --agent
 prdr list --repo OWNER/REPOSITORY --pr 123 --state open --limit 50 --agent
 prdr show review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
 ```
@@ -136,6 +172,25 @@ safe rendered view that removes terminal control bytes.
 checks that need attention. It does not return Markdown bodies or passing check names. It does not
 truncate `openItems`. Use `inspect --json` when you need the complete snapshot.
 
+`context --agent` returns the exact title and Markdown body. It also returns repository identity,
+lifecycle state, base and head refs with full SHAs, commit summaries, changed files, diff totals,
+checks that need attention, reviews, and unresolved review threads. Use `--purpose authoring` for
+short thread summaries. Use `--purpose review` for exact unresolved thread bodies. Each section has
+`total` and `truncated`. Continue with `nextCursor` while `hasMore` is true. GitHub's public
+`PullRequest` type does not expose its archive flag, so normal reads state
+`lifecycle.archiveState=not-exposed` instead of guessing from closed or locked state.
+
+Before creation, use the same command for a pinned comparison:
+
+```nu
+prdr context --repo OWNER/BASE --base main --base-sha BASE_SHA --head-repo OWNER/HEAD --head feature/name --head-sha HEAD_SHA --limit 100 --agent
+```
+
+Comparison commit pages use an opaque cursor. GitHub can return at most 300 changed files from this
+API. The result states that file limit when it applies. GitHub returns the changed-file map and
+diff totals only on the first comparison page. Later pages set `files.included` to `false` and the
+omitted totals to `null`. Retain page one while you continue commit pages.
+
 `show --agent` returns the selected exact body once under `data.body`. For an inline thread, it puts
 each other comment once under `data.thread.otherComments`. It omits repeated roots, diff hunks, node
 IDs, and other transport fields. Use `show --json` when those raw fields are required.
@@ -167,22 +222,83 @@ The cursor binds to the PR, head commit, filters, and normalized result set. If 
 changes between page requests, `prdr` returns `ListPaginationError`. Restart without `--cursor` so
 that the traversal cannot skip or repeat records.
 
-## Markdown-safe writes
+## Author and update pull requests
 
-Write the body to a file first. This makes the content easy to inspect and avoids shell expansion.
+Create is separate from update. Create requires exact remote base and head SHAs and an explicit
+readiness value:
 
 ```nu
-prdr comment --body-file /tmp/prdr-comment.md --agent
-prdr reply review-comment:123 --body-file /tmp/prdr-reply.md --agent
-prdr edit issue-comment:456 --body-file /tmp/prdr-edit.md --agent
-prdr review --event approve --body-file /tmp/prdr-review.md --agent
-prdr resolve review-comment:123 --agent
-prdr unresolve thread:PRRT_example --agent
+$body | prdr create \
+  --repo OWNER/BASE_REPOSITORY \
+  --base main \
+  --base-sha BASE_SHA \
+  --head-repo OWNER/HEAD_REPOSITORY \
+  --head-branch feature/name \
+  --head-sha HEAD_SHA \
+  --readiness draft \
+  --title 'Exact title' \
+  --stdin --agent
 ```
 
-Pass exactly one of `--body-file PATH` or `--stdin`. `reply` targets the root of an inline review
-thread. GitHub issue comments are not threads, so `comment` creates a new pull request conversation
-comment.
+Before it creates the pull request, `prdr` resolves both remote refs again. It stops if a ref is
+missing, a SHA is stale, or a matching open pull request exists. It reads the new pull request and
+verifies every pinned field. The result includes the body byte count and SHA-256 hash.
+
+Use typed commands for later changes:
+
+```nu
+$body | prdr update --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --stdin --agent
+prdr update --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --title 'New title' --agent
+prdr transition --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --action mark-ready --agent
+prdr update-branch --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --method rebase --agent
+prdr reviewers --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --action request --user octocat --team platform --agent
+```
+
+`transition` accepts only `close`, `reopen`, `mark-ready`, and `convert-draft`. `update` requires at
+least one of title, body, or base. `update-branch` requires `merge` or `rebase`.
+
+## Markdown-safe writes
+
+Pipe exact Markdown through standard input. This avoids shell expansion and does not require a
+temporary file.
+
+```nu
+$body | prdr comment --repo OWNER/REPOSITORY --pr 123 --stdin --agent
+$body | prdr reply review-comment:123 --repo OWNER/REPOSITORY --pr 123 --stdin --agent
+$body | prdr edit issue-comment:456 --repo OWNER/REPOSITORY --pr 123 --stdin --agent
+$body | prdr review --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --event approve --stdin --agent
+prdr resolve review-comment:123 --repo OWNER/REPOSITORY --pr 123 --agent
+prdr unresolve thread:PRRT_example --repo OWNER/REPOSITORY --pr 123 --agent
+```
+
+The CLI also accepts `--body-file PATH`. Pass exactly one of `--body-file` or `--stdin`. The Shim
+tools accept `body` as a direct string and always use standard input. `reply` targets the root of an
+inline review thread. GitHub issue comments are not threads, so `comment` creates a new pull request
+conversation comment.
+
+For one atomic review with several inline findings, send the typed request as JSON on standard
+input. Each finding has `path`, `line`, `side`, and `body`. A range also has `startLine` and
+`startSide`. `prdr` verifies that each coordinate is in the current diff before it writes.
+
+## Deliver pull requests
+
+Delivery commands are separate because they have different effects and permissions:
+
+```nu
+prdr auto-merge --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --action enable --strategy squash --agent
+prdr queue --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --action enqueue --agent
+prdr merge --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --strategy squash --agent
+$body | prdr revert --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --readiness draft --title 'Revert change' --stdin --agent
+prdr archive --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --agent
+prdr unarchive --repo OWNER/REPOSITORY --pr 123 --expected-head HEAD_SHA --agent
+```
+
+Merge stops when a check needs attention, review changes are requested, a review thread is open,
+the repository blocks the merge, or the head is stale. Revert returns the identity of the new
+revert pull request. Archive and unarchive require administration permission. Their result verifies
+the named mutation payload, repository and PR identity, head, and a second read. Archive also
+verifies GitHub's visible closed and locked consequences. A successful read does not permit a
+write. Each command needs authority for that exact GitHub action.
 
 ## Greptile
 

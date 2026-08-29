@@ -351,6 +351,50 @@ describe('GitHub writes', () => {
     const run = Effect.fn('TestGh.run')((request: GhRequest) =>
       Effect.sync(() => {
         captured.push(request);
+        if (request.input?.includes('query PrdrWorkflowState') === true) {
+          return {
+            exitCode: 0,
+            stderr: '',
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    autoMergeRequest: null,
+                    baseRefName: 'main',
+                    baseRefOid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    body: '',
+                    headRefName: pullRequest.headRefName,
+                    headRefOid: pullRequest.headRefOid,
+                    id: 'PR_42',
+                    isDraft: false,
+                    locked: false,
+                    mergeQueueEntry: null,
+                    mergeStateStatus: 'CLEAN',
+                    mergeable: 'MERGEABLE',
+                    merged: false,
+                    number: target.number,
+                    repository: {
+                      id: 'R_1',
+                      nameWithOwner: target.nameWithOwner,
+                      viewerPermission: 'WRITE',
+                    },
+                    reviewDecision: null,
+                    state: 'OPEN',
+                    title: pullRequest.title,
+                    url: pullRequest.url,
+                    viewerCanClose: true,
+                    viewerCanDisableAutoMerge: false,
+                    viewerCanEnableAutoMerge: true,
+                    viewerCanMergeAsAdmin: false,
+                    viewerCanReopen: false,
+                    viewerCanUpdate: true,
+                    viewerCanUpdateBranch: true,
+                  },
+                },
+              },
+            }),
+          };
+        }
         return {
           exitCode: 0,
           stderr: '',
@@ -368,7 +412,11 @@ describe('GitHub writes', () => {
     const created = await Effect.runPromise(
       createIssueComment(target, body).pipe(Effect.provide(layer)),
     );
-    const [request] = captured;
+    const request = captured.find(
+      ({ arguments: arguments_ }) =>
+        arguments_.includes('POST') &&
+        arguments_.includes('repos/seanmozeik/prdr/issues/42/comments'),
+    );
     if (request === undefined) {
       throw new Error('The fake gh client did not receive a request.');
     }

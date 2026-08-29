@@ -5,7 +5,7 @@ import { outputMode, repositoryFlag } from '../cli/flags';
 import { printPullRequestList } from '../cli/presentation';
 import { emit, toMode } from '../cli/shared';
 import { toAgentPullRequestListPage } from '../domain/agent-output';
-import { DEFAULT_PULL_REQUEST_PAGE_SIZE, listPullRequests } from '../github/pull-requests';
+import { DEFAULT_PULL_REQUEST_PAGE_SIZE, listPullRequests } from '../github/pull-request';
 
 const baseFlag = Flag.string('base').pipe(
   Flag.withDefault(''),

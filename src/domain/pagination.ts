@@ -30,6 +30,7 @@ const ListCursor = Schema.Struct({
   version: Schema.Literal(CURSOR_VERSION),
 });
 type ListCursor = typeof ListCursor.Type;
+const decodeListCursorJson = Schema.decodeEffect(Schema.fromJsonString(ListCursor));
 
 export interface ListPageOptions {
   readonly cursor: string;
@@ -65,7 +66,7 @@ const decodeCursor = Effect.fn('List.decodeCursor')(function* decodeCursor(raw: 
     catch: () => paginationError('The list cursor is invalid. Start again without --cursor.'),
     try: () => Buffer.from(raw, 'base64url').toString('utf8'),
   });
-  const cursor = yield* Schema.decodeEffect(Schema.fromJsonString(ListCursor))(json).pipe(
+  const cursor = yield* decodeListCursorJson(json).pipe(
     Effect.mapError(() =>
       paginationError('The list cursor is invalid. Start again without --cursor.'),
     ),

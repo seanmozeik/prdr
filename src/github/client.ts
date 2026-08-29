@@ -5,6 +5,7 @@ import { GhCommandError, GhDecodeError, GhEncodeError } from './errors';
 export interface GhRequest {
   readonly acceptedExitCodes: readonly number[];
   readonly arguments: readonly string[];
+  readonly cwd?: string;
   readonly input: string | null;
 }
 
@@ -22,6 +23,7 @@ interface ProcessResult {
 
 const execute = async (request: GhRequest, signal: AbortSignal): Promise<ProcessResult> => {
   const subprocess = Bun.spawn(['gh', ...request.arguments], {
+    ...(request.cwd !== undefined && { cwd: request.cwd }),
     signal,
     stderr: 'pipe',
     stdin: request.input === null ? 'ignore' : 'pipe',
@@ -76,6 +78,13 @@ export const ghRequest = (
   input: string | null = null,
   acceptedExitCodes: readonly number[] = [0],
 ): GhRequest => ({ acceptedExitCodes, arguments: arguments_, input });
+
+export const ghRequestInDirectory = (
+  arguments_: readonly string[],
+  cwd: string,
+  input: string | null = null,
+  acceptedExitCodes: readonly number[] = [0],
+): GhRequest => ({ acceptedExitCodes, arguments: arguments_, cwd, input });
 
 export const restApiHeaders = (host: string): readonly string[] => [
   '-H',
